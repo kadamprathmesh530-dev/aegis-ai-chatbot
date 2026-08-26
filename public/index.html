@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aegis AI - Secure Chatbot & Analytics</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- Main Project Styles -->
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- Highlight.js for Code Highlighting -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" id="highlight-theme">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  
+  <!-- Marked for Markdown Rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <!-- Application Stylesheets -->
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="theme-dark">
+  <!-- Toast Notification System -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- ================= AUTH VIEW ================= -->
+  <div id="auth-view" class="view auth-view active">
+    <div class="auth-bg-glow glow-1"></div>
+    <div class="auth-bg-glow glow-2"></div>
+    <div class="auth-bg-pattern"></div>
+    
+    <div class="auth-container">
+      <div class="auth-brand">
+        <div class="brand-icon">
+          <i class="fa-solid fa-shield-halved"></i>
+        </div>
+        <h1 class="brand-title">Aegis<span>AI</span></h1>
+        <p class="brand-tagline">Secure AI Chatbot &amp; Intelligence Platform</p>
+      </div>
+
+      <div class="auth-card">
+        <!-- Auth Tabs -->
+        <div class="auth-tabs" role="tablist">
+          <button type="button" class="auth-tab-btn active" id="tab-login-btn" role="tab" aria-selected="true">
+            <i class="fa-solid fa-arrow-right-to-bracket"></i>
+            <span>Sign In</span>
+          </button>
+          <button type="button" class="auth-tab-btn" id="tab-register-btn" role="tab" aria-selected="false">
+            <i class="fa-solid fa-user-plus"></i>
+            <span>Create Account</span>
+          </button>
+        </div>
+
+        <!-- Login Form -->
+        <form id="login-form" class="auth-form active" autocomplete="on">
+          <div class="form-group">
+            <label for="login-identifier">
+              <i class="fa-regular fa-envelope"></i>
+              <span>Email or Username</span>
+            </label>
+            <div class="input-wrapper">
+              <input 
+                type="text" 
+                id="login-identifier" 
+                placeholder="name@example.com or username" 
+                required 
+                autocomplete="username"
+                spellcheck="false">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="label-row">
+              <label for="login-password">
+                <i class="fa-solid fa-lock"></i>
+                <span>Password</span>
+              </label>
+            </div>
+            <div class="input-wrapper">
+              <input 
+                type="password" 
+                id="login-password" 
+                placeholder="Enter your password" 
+                required 
+                autocomplete="current-password">
+              <button 
+                type="button" 
+                class="toggle-password"  
+                title="Toggle password visibility"
+                aria-label="Toggle password visibility">
+                <i class="fa-regular fa-eye"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-error" id="login-error" role="alert"></div>
+
+          <button type="submit" class="btn btn-primary btn-block btn-auth-submit" id="login-submit-btn">
+            <span>Sign In to Account</span>
+            <i class="fa-solid fa-arrow-right"></i>
+          </button>
+
+          <div class="auth-switch-prompt">
+            <span>Don't have an account yet?</span>
+            <button type="button" class="link-btn" id="create-account-link">Create an account</button>
+          </div>
+        </form>
+
+        <!-- Register Form -->
+        <form id="register-form" class="auth-form" autocomplete="on">
+          <div class="form-group">
+            <label for="reg-username">
+              <i class="fa-solid fa-at"></i>
+              <span>Username</span>
+            </label>
+            <div class="input-wrapper">
+              <input 
+                type="text" 
+                id="reg-username" 
+                placeholder="Choose a username" 
+                required 
+                minlength="3" 
+                maxlength="30" 
+                autocomplete="username"
+                spellcheck="false">
+            </div>
+            <small class="field-hint">3–30 characters (letters, numbers, hyphens, underscores).</small>
+          </div>
+
+          <div class="form-group">
+            <label for="reg-email">
+              <i class="fa-regular fa-envelope"></i>
+              <span>Email Address</span>
+            </label>
+            <div class="input-wrapper">
+              <input 
+                type="email" 
+                id="reg-email" 
+                placeholder="name@example.com" 
+                required 
+                autocomplete="email">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="reg-password">
+              <i class="fa-solid fa-lock"></i>
+              <span>Password</span>
+            </label>
+            <div class="input-wrapper">
+              <input 
+                type="password" 
+                id="reg-password" 
+                placeholder="At least 6 characters" 
+                required 
+                minlength="6" 
+                autocomplete="new-password">
+              <button 
+                type="button" 
+                class="toggle-password" 
+                title="Toggle password visibility"
+                aria-label="Toggle password visibility">
+                <i class="fa-regular fa-eye"></i>
+              </button>
+            </div>
+            <div class="strength-meter-container">
+              <div class="strength-meter-bar" id="strength-bar"></div>
+            </div>
+            <div class="strength-meta">
+              <span class="strength-text" id="strength-text">Password strength</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="reg-confirm-password">
+              <i class="fa-solid fa-shield-check"></i>
+              <span>Confirm Password</span>
+            </label>
+            <div class="input-wrapper">
+              <input 
+                type="password" 
+                id="reg-confirm-password" 
+                placeholder="Confirm your password" 
+                required 
+                autocomplete="new-password">
+            </div>
+          </div>
+
+          <div class="form-error" id="register-error" role="alert"></div>
+
+          <button type="submit" class="btn btn-primary btn-block btn-auth-submit" id="register-submit-btn">
+            <span>Create Secure Account</span>
+            <i class="fa-solid fa-shield-halved"></i>
+          </button>
+
+          <div class="auth-switch-prompt">
+            <span>Already registered?</span>
+            <button type="button" class="link-btn" id="sign-in-link">Sign in here</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="auth-security-notice">
+        <i class="fa-solid fa-lock"></i>
+        <span>Passwords secured with bcrypt hashing &bull; Strict backend user data isolation</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MAIN APP VIEW ================= -->
+  <div id="app-view" class="view app-view">
+    <!-- Mobile Sidebar Backdrop -->
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+    <!-- Left Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">
+          <div class="brand-icon-sm">
+            <i class="fa-solid fa-shield-halved"></i>
+          </div>
+          <span class="brand-name">Aegis<span>AI</span></span>
+        </div>
+        <button class="icon-btn mobile-only" id="close-sidebar-btn" title="Close Sidebar">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="sidebar-action">
+        <button class="btn btn-primary btn-new-chat" id="new-chat-btn">
+          <i class="fa-solid fa-plus"></i>
+          <span>New Conversation</span>
+        </button>
+      </div>
+
+      <div class="sidebar-search">
+        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        <input type="text" id="conv-search" placeholder="Search conversations..." oninput="filterConversations(this.value)">
+      </div>
+
+      <!-- Conversations List -->
+      <div class="conversations-list-wrapper">
+        <div class="conversations-list" id="conversations-list">
+          <!-- Dynamic conversation items injected here -->
+        </div>
+      </div>
+
+      <!-- User Profile Card in Sidebar Footer -->
+      <div class="sidebar-footer">
+        <div class="user-card" id="user-profile-card">
+          <div class="user-avatar" id="sidebar-user-avatar">
+            <span id="sidebar-user-initials">U</span>
+          </div>
+          <div class="user-info">
+            <span class="user-name" id="sidebar-username">User</span>
+            <span class="user-role-badge" id="sidebar-user-role">User</span>
+          </div>
+          <button class="icon-btn-ghost" title="User Settings">
+            <i class="fa-solid fa-gear"></i>
+          </button>
+        </div>
+
+        <div class="sidebar-footer-actions">
+          <!-- Admin Panel Button (Hidden for non-admin) -->
+          <button class="btn btn-ghost btn-sm admin-only-btn" id="sidebar-admin-btn" style="display: none;">
+            <i class="fa-solid fa-chart-line"></i>
+            <span>Admin Dashboard</span>
+          </button>
+          <button class="btn btn-ghost btn-sm" id="sidebar-logout-btn" title="Logout">
+            <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            <span>Sign Out</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- ============ USER CHAT VIEW ============ -->
+      <section id="chat-subview" class="chat-subview active">
+        <!-- Chat Header -->
+        <header class="chat-header">
+          <div class="header-left">
+            <button class="icon-btn mobile-menu-btn" id="open-menu-btn" title="Open Menu">
+              <i class="fa-solid fa-bars"></i>
+            </button>
+            <div class="chat-title-container">
+              <h2 class="active-chat-title" id="active-chat-title">New Conversation</h2>
+              <button class="icon-btn-ghost edit-title-btn" id="rename-conversation-btn" title="Rename Conversation">
+                <i class="fa-solid fa-pen"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="header-right">
+            <div class="model-badge" title="AI Model Backend">
+              <i class="fa-solid fa-brain"></i>
+              <span>Gemini 1.5 Flash</span>
+            </div>
+            
+            <button class="icon-btn theme-toggle-btn" id="theme-toggle-btn" title="Toggle Dark/Light Theme">
+              <i class="fa-solid fa-sun" id="theme-icon"></i>
+            </button>
+
+            <button class="btn btn-accent btn-sm admin-only-btn" id="header-admin-btn" style="display: none;">
+              <i class="fa-solid fa-shield"></i>
+              <span>Admin Portal</span>
+            </button>
+          </div>
+        </header>
+
+        <!-- Messages Area -->
+        <div class="messages-container" id="messages-container">
+          <!-- Welcome Empty State -->
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon">
+              <i class="fa-solid fa-wand-magic-sparkles"></i>
+            </div>
+            <h3>What can I help you build or explore today?</h3>
+            <p>Your chats are securely encrypted and privately stored in your dedicated database partition.</p>
+            
+            <div class="prompt-suggestions">
+              <button class="suggestion-card" id="suggest-security">
+                <i class="fa-solid fa-lock"></i>
+                <div class="suggestion-text">
+                  <strong>Security Best Practices</strong>
+                  <span>Explain bcrypt hashing and JWT tokens</span>
+                </div>
+              </button>
+
+              <button class="suggestion-card" id="suggest-code">
+                <i class="fa-solid fa-code"></i>
+                <div class="suggestion-text">
+                  <strong>Code Generation</strong>
+                  <span>Write an async JavaScript fetch wrapper</span>
+                </div>
+              </button>
+
+              <button class="suggestion-card" id="suggest-database">
+                <i class="fa-solid fa-database"></i>
+                <div class="suggestion-text">
+                  <strong>Database Architecture</strong>
+                  <span>Explain SQLite WAL mode and indexes</span>
+                </div>
+              </button>
+
+              <button class="suggestion-card" id="suggest-brainstorm">
+                <i class="fa-solid fa-lightbulb"></i>
+                <div class="suggestion-text">
+                  <strong>Brainstorming</strong>
+                  <span>Design features for intelligent assistants</span>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <!-- Message Feed List -->
+          <div class="message-feed" id="message-feed"></div>
+
+          <!-- Typing / Thinking Indicator -->
+          <div class="typing-indicator-wrapper" id="typing-indicator" style="display: none;">
+            <div class="bot-avatar">
+              <i class="fa-solid fa-brain"></i>
+            </div>
+            <div class="typing-bubble">
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Input Footer -->
+        <footer class="chat-input-footer">
+          <form class="chat-input-form" id="chat-form">
+            <div class="input-box-wrapper">
+              <textarea 
+                id="chat-input" 
+                rows="1" 
+                placeholder="Message Aegis AI... (Shift + Enter for new line)" ></textarea>
+              <button type="submit" class="send-btn" id="send-btn" title="Send Message (Enter)">
+                <i class="fa-solid fa-paper-plane"></i>
+              </button>
+            </div>
+          </form>
+          <div class="chat-disclaimer">
+            <span>Aegis AI — Designed &amp; Developed by Prathmesh Kadam</span><br>
+            <span>It cannot gives wrong information</span>   
+          </div>
+        </footer>
+      </section>
+
+      <!-- ============ ADMIN DASHBOARD SUBVIEW ============ -->
+      <section id="admin-subview" class="admin-subview" style="display: none;">
+        <header class="admin-header">
+          <div class="admin-header-left">
+            <button class="btn btn-ghost btn-sm" id="close-admin-btn">
+              <i class="fa-solid fa-arrow-left"></i>
+              <span>Back to Chat</span>
+            </button>
+            <div class="admin-title-group">
+              <h2><i class="fa-solid fa-shield-halved"></i> Administrator Dashboard</h2>
+              <p class="admin-subtitle">Secure project analytics, user management, and conversation oversight</p>
+            </div>
+          </div>
+          <div class="admin-header-right">
+            <button class="btn btn-ghost btn-sm" id="refresh-admin-btn" title="Refresh Data">
+              <i class="fa-solid fa-arrows-rotate"></i>
+              <span>Refresh</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="admin-content-scroll">
+          <!-- Stats Grid -->
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-icon stat-users">
+                <i class="fa-solid fa-users"></i>
+              </div>
+              <div class="stat-details">
+                <span class="stat-label">Total Registered Users</span>
+                <h3 class="stat-value" id="stat-total-users">0</h3>
+              </div>
+            </div>
+
+            <div class="stat-card">
+              <div class="stat-icon stat-conversations">
+                <i class="fa-solid fa-comments"></i>
+              </div>
+              <div class="stat-details">
+                <span class="stat-label">Total Conversations</span>
+                <h3 class="stat-value" id="stat-total-conversations">0</h3>
+              </div>
+            </div>
+
+            <div class="stat-card">
+              <div class="stat-icon stat-messages">
+                <i class="fa-solid fa-message"></i>
+              </div>
+              <div class="stat-details">
+                <span class="stat-label">Total Messages</span>
+                <h3 class="stat-value" id="stat-total-messages">0</h3>
+              </div>
+            </div>
+
+            <div class="stat-card">
+              <div class="stat-icon stat-admins">
+                <i class="fa-solid fa-user-shield"></i>
+              </div>
+              <div class="stat-details">
+                <span class="stat-label">Active Users (24h)</span>
+                <h3 class="stat-value" id="stat-active-users">0</h3>
+              </div>
+            </div>
+          </div>
+
+          <!-- Registered Users Table Section -->
+          <div class="admin-section-card">
+            <div class="section-card-header">
+              <div class="section-title">
+                <h3><i class="fa-solid fa-user-gear"></i> Registered Accounts</h3>
+                <span class="section-badge" id="user-count-badge">0 Users</span>
+              </div>
+              <div class="section-controls">
+                <div class="admin-search-box">
+                  <i class="fa-solid fa-magnifying-glass"></i>
+                  <input type="text" id="admin-user-search" placeholder="Search by username or email..." oninput="filterAdminUsers(this.value)">
+                </div>
+              </div>
+            </div>
+
+            <div class="table-responsive">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>User</th>
+                    <th>Role</th>
+                    <th>Registered</th>
+                    <th>Last Active</th>
+                    <th>Conversations</th>
+                    <th>Messages</th>
+                    <th class="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-users-tbody">
+                  <!-- User rows inserted here -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ================= MODALS ================= -->
+
+  <!-- Profile & Password Settings Modal -->
+  <div class="modal-backdrop" id="profile-modal" style="display: none;">
+    <div class="modal-container">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-user-shield"></i> Account Profile</h3>
+        <button class="icon-btn-ghost" id="close-profile-modal-btn" title="Close">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="profile-details-grid">
+          <div class="profile-field">
+            <span class="field-label">Username</span>
+            <strong class="field-val" id="prof-username">-</strong>
+          </div>
+          <div class="profile-field">
+            <span class="field-label">Email Address</span>
+            <strong class="field-val" id="prof-email">-</strong>
+          </div>
+          <div class="profile-field">
+            <span class="field-label">Role</span>
+            <span class="badge" id="prof-role">-</span>
+          </div>
+          <div class="profile-field">
+            <span class="field-label">Joined</span>
+            <span class="field-val" id="prof-created">-</span>
+          </div>
+        </div>
+
+        <hr class="modal-divider">
+
+        <h4 class="modal-subtitle"><i class="fa-solid fa-key"></i> Change Password</h4>
+        <form id="change-password-form" onsubmit="handleChangePassword(event)">
+          <div class="form-group">
+            <label for="cp-current"><i class="fa-solid fa-lock"></i> Current Password</label>
+            <input type="password" id="cp-current" placeholder="Current password" required>
+          </div>
+          <div class="form-group">
+            <label for="cp-new"><i class="fa-solid fa-key"></i> New Password</label>
+            <input type="password" id="cp-new" placeholder="Minimum 6 characters" required minlength="6">
+          </div>
+          <div class="form-group">
+            <label for="cp-confirm"><i class="fa-solid fa-check-double"></i> Confirm New Password</label>
+            <input type="password" id="cp-confirm" placeholder="Confirm new password" required>
+          </div>
+          <div class="form-error" id="cp-error"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" id="cancel-profile-modal-btn">Cancel</button>
+            <button type="submit" class="btn btn-primary">Update Password</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Conversation Inspector Modal -->
+  <div class="modal-backdrop" id="admin-inspect-modal" style="display: none;">
+    <div class="modal-container modal-lg">
+      <div class="modal-header">
+        <div class="inspect-header-info">
+          <h3><i class="fa-solid fa-eye"></i> Conversation Inspector</h3>
+          <p class="inspect-user-subtitle" id="inspect-user-subtitle">User Conversations Overview</p>
+        </div>
+        <button class="icon-btn-ghost" id="close-inspect-modal-btn" title="Close">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="modal-body inspect-body">
+        <div class="inspect-layout">
+          <!-- Left: User's Conversation Threads -->
+          <div class="inspect-threads-list">
+            <h4 class="inspect-pane-title">Conversations</h4>
+            <div id="inspect-threads-container" class="inspect-threads-container">
+              <!-- Thread items injected here -->
+            </div>
+          </div>
+
+          <!-- Right: Selected Conversation Transcript -->
+          <div class="inspect-transcript-view">
+            <div class="transcript-header">
+              <h4 id="inspect-conv-title">Select a conversation</h4>
+              <span class="transcript-meta" id="inspect-conv-meta"></span>
+            </div>
+            <div class="transcript-messages" id="inspect-messages-container">
+              <div class="inspect-placeholder">Select a conversation thread on the left to inspect full messages.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/api.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/chat.js"></script>
+  <script src="js/admin.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
