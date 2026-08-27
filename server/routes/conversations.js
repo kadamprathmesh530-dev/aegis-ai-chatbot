@@ -11,10 +11,11 @@ router.use(authenticateToken);
  * GET /api/conversations
  * Retrieve all conversations for the authenticated user
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const conversations = conversationQueries.getByUserId.all(req.user.id);
-    return res.json({
+    const conversations =
+    await conversationQueries.getByUserId(req.user.id);
+    res.json({
       success: true,
       conversations
     });
