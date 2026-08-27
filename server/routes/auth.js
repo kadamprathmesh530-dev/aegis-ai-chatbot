@@ -237,7 +237,23 @@ router.patch('/change-password', authenticateToken, async (req, res) => {
     }
 
     const newHash = await bcrypt.hash(newPassword, 12);
-    userQueries.updatePassword.run(newHash, req.user.id);
+
+    const result = userQueries.updatePassword.run(
+      newHash,
+      req.user.id
+    );
+
+    console.log('[PASSWORD CHANGE]', {
+     userId: req.user.id,
+      changes: result.changes
+    });
+
+    if (result.changes !== 1) {
+    return res.status(500).json({
+      success: false,
+      error: 'Password was not updated in database.'
+    });
+    }
 
     return res.json({
       success: true,
