@@ -358,7 +358,7 @@ router.post('/', async (req, res) => {
 
         const model =
           genAI.getGenerativeModel({
-            model: 'gemini-3.6-flash',
+            model: 'gemini-3.5-flash',
 
             systemInstruction:
               AEGIS_SYSTEM_INSTRUCTION
