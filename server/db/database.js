@@ -1,219 +1,401 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
+const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 
-// Ensure data directory exists
-const dataDir = process.env.DATA_DIR || path.join(__dirname, '../../data');
+// Neon PostgreSQL connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-const dbPath = path.join(dataDir, 'chatbot.db');
-const db = new Database(dbPath);
-
-// Enable foreign keys and WAL mode for optimal concurrency & integrity
-db.pragma('foreign_keys = ON');
-db.pragma('journal_mode = WAL');
-
-// Initialize database schema
-function initDatabase() {
-  db.exec(`
+// Initialize database tables
+async function initDatabase() {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'user',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      last_login_at DATETIME
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      last_login_at TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       title TEXT NOT NULL DEFAULT 'New Conversation',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      conversation_id TEXT NOT NULL,
+      id SERIAL PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
       content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
-    CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
-    CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations (user_id, updated_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_users_email
+      ON users(email);
+
+    CREATE INDEX IF NOT EXISTS idx_users_username
+      ON users(username);
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_user
+      ON conversations(user_id, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation
+      ON messages(conversation_id, created_at ASC);
   `);
 
-  seedAdminUser();
+  await seedAdminUser();
 }
 
-// Ensure schema is created before compiling prepared statements
-initDatabase();
+// Seed admin account
+async function seedAdminUser() {
+  const adminEmail =
+    (process.env.ADMIN_EMAIL || 'admin@chatbot.local')
+      .toLowerCase()
+      .trim();
 
-// Seed designated admin user if not already present
-function seedAdminUser() {
-  const adminEmail = (process.env.ADMIN_EMAIL || 'admin@chatbot.local').toLowerCase().trim();
-  const adminUsername = (process.env.ADMIN_USERNAME || 'admin').trim();
-  const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@123456';
+  const adminUsername =
+    (process.env.ADMIN_USERNAME || 'admin').trim();
 
-  const existingAdmin = db.prepare('SELECT id, role FROM users WHERE email = ? OR role = ?').get(adminEmail, 'admin');
+  const adminPassword =
+    process.env.ADMIN_PASSWORD || 'Admin@123456';
 
-  if (!existingAdmin) {
-    const saltRounds = 12;
-    const passwordHash = bcrypt.hashSync(adminPassword, saltRounds);
-    
-    const stmt = db.prepare(`
-      INSERT INTO users (username, email, password_hash, role)
-      VALUES (?, ?, ?, 'admin')
-    `);
-    
+  const existingAdmin = await pool.query(
+    'SELECT id, role FROM users WHERE email = $1 OR role = $2 LIMIT 1',
+    [adminEmail, 'admin']
+  );
+
+  if (existingAdmin.rows.length === 0) {
+    const passwordHash = await bcrypt.hash(adminPassword, 12);
+
     try {
-      stmt.run(adminUsername, adminEmail, passwordHash);
+      await pool.query(
+        `INSERT INTO users
+        (username, email, password_hash, role)
+        VALUES ($1, $2, $3, 'admin')`,
+        [adminUsername, adminEmail, passwordHash]
+      );
+
       console.log(`[DB] Designated Admin account created: ${adminEmail}`);
     } catch (err) {
-      console.error('[DB] Error creating default admin account:', err.message);
+      console.error(
+        '[DB] Error creating default admin account:',
+        err.message
+      );
     }
   }
 }
 
-// User operations
+/*
+ * USER QUERIES
+ * PostgreSQL versions of the old SQLite queries
+ */
 const userQueries = {
-  getByEmail: db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)'),
-  getByUsername: db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)'),
-  getById: db.prepare('SELECT id, username, email, role, created_at, last_login_at FROM users WHERE id = ?'),
-  getByIdWithPassword: db.prepare('SELECT * FROM users WHERE id = ?'),
-  create: db.prepare(`
-    INSERT INTO users (username, email, password_hash, role)
-    VALUES (?, LOWER(?), ?, ?)
-  `),
-  updateLastLogin: db.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?'),
-  updateRole: db.prepare('UPDATE users SET role = ? WHERE id = ?'),
-  updatePassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
-  deleteUser: db.prepare('DELETE FROM users WHERE id = ?'),
-  getAllUsersWithStats: db.prepare(`
-    SELECT 
-      u.id, 
-      u.username, 
-      u.email, 
-      u.role, 
-      u.created_at, 
-      u.last_login_at,
-      COUNT(DISTINCT c.id) AS conversation_count,
-      COUNT(m.id) AS message_count
-    FROM users u
-    LEFT JOIN conversations c ON u.id = c.user_id
-    LEFT JOIN messages m ON c.id = m.conversation_id
-    GROUP BY u.id
-    ORDER BY u.created_at DESC
-  `),
-  getUserCount: db.prepare('SELECT COUNT(*) as count FROM users')
+
+  getByEmail: async (email) => {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1)',
+      [email]
+    );
+    return result.rows[0] || null;
+  },
+
+  getByUsername: async (username) => {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
+      [username]
+    );
+    return result.rows[0] || null;
+  },
+
+  getById: async (id) => {
+    const result = await pool.query(
+      `SELECT id, username, email, role, created_at, last_login_at
+       FROM users
+       WHERE id = $1`,
+      [id]
+    );
+    return result.rows[0] || null;
+  },
+
+  getByIdWithPassword: async (id) => {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE id = $1',
+      [id]
+    );
+    return result.rows[0] || null;
+  },
+
+  create: async (username, email, passwordHash, role) => {
+    const result = await pool.query(
+      `INSERT INTO users
+       (username, email, password_hash, role)
+       VALUES ($1, LOWER($2), $3, $4)
+       RETURNING *`,
+      [username, email, passwordHash, role]
+    );
+
+    return result.rows[0];
+  },
+
+  updateLastLogin: async (id) => {
+    return pool.query(
+      'UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1',
+      [id]
+    );
+  },
+
+  updateRole: async (role, id) => {
+    return pool.query(
+      'UPDATE users SET role = $1 WHERE id = $2',
+      [role, id]
+    );
+  },
+
+  updatePassword: async (passwordHash, id) => {
+    return pool.query(
+      'UPDATE users SET password_hash = $1 WHERE id = $2',
+      [passwordHash, id]
+    );
+  },
+
+  deleteUser: async (id) => {
+    return pool.query(
+      'DELETE FROM users WHERE id = $1',
+      [id]
+    );
+  },
+
+  getAllUsersWithStats: async () => {
+    const result = await pool.query(`
+      SELECT
+        u.id,
+        u.username,
+        u.email,
+        u.role,
+        u.created_at,
+        u.last_login_at,
+        COUNT(DISTINCT c.id)::int AS conversation_count,
+        COUNT(m.id)::int AS message_count
+      FROM users u
+      LEFT JOIN conversations c ON u.id = c.user_id
+      LEFT JOIN messages m ON c.id = m.conversation_id
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+    `);
+
+    return result.rows;
+  },
+
+  getUserCount: async () => {
+    const result = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM users'
+    );
+
+    return result.rows[0];
+  }
 };
 
-// Conversation operations
+/*
+ * CONVERSATION QUERIES
+ */
 const conversationQueries = {
-  getByUserId: db.prepare(`
-    SELECT 
-      c.id, 
-      c.title, 
-      c.created_at, 
-      c.updated_at,
-      (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message,
-      (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) AS message_count
-    FROM conversations c
-    WHERE c.user_id = ?
-    ORDER BY c.updated_at DESC
-  `),
-  getById: db.prepare('SELECT * FROM conversations WHERE id = ?'),
-  getByIdAndUser: db.prepare('SELECT * FROM conversations WHERE id = ? AND user_id = ?'),
-  create: db.prepare(`
-    INSERT INTO conversations (id, user_id, title)
-    VALUES (?, ?, ?)
-  `),
-  updateTitle: db.prepare(`
-    UPDATE conversations 
-    SET title = ?, updated_at = CURRENT_TIMESTAMP 
-    WHERE id = ? AND user_id = ?
-  `),
-  touchUpdatedAt: db.prepare(`
-    UPDATE conversations 
-    SET updated_at = CURRENT_TIMESTAMP 
-    WHERE id = ?
-  `),
-  delete: db.prepare('DELETE FROM conversations WHERE id = ? AND user_id = ?'),
-  deleteByAdmin: db.prepare('DELETE FROM conversations WHERE id = ?'),
-  getAdminStats: db.prepare(`
-    SELECT 
-      (SELECT COUNT(*) FROM users) AS total_users,
-      (SELECT COUNT(*) FROM users WHERE role = 'admin') AS total_admins,
-      (SELECT COUNT(*) FROM conversations) AS total_conversations,
-      (SELECT COUNT(*) FROM messages) AS total_messages,
-      (SELECT COUNT(DISTINCT user_id) FROM conversations WHERE updated_at >= datetime('now', '-24 hours')) AS active_users_24h
-  `),
-  getAllConversationsForAdmin: db.prepare(`
-    SELECT 
-      c.id, 
-      c.user_id,
-      u.username,
-      u.email,
-      c.title, 
-      c.created_at, 
-      c.updated_at,
-      COUNT(m.id) AS message_count
-    FROM conversations c
-    JOIN users u ON c.user_id = u.id
-    LEFT JOIN messages m ON c.id = m.conversation_id
-    GROUP BY c.id
-    ORDER BY c.updated_at DESC
-  `),
-  getConversationsBySpecificUserForAdmin: db.prepare(`
-    SELECT 
-      c.id, 
-      c.user_id,
-      c.title, 
-      c.created_at, 
-      c.updated_at,
-      COUNT(m.id) AS message_count
-    FROM conversations c
-    LEFT JOIN messages m ON c.id = m.conversation_id
-    WHERE c.user_id = ?
-    GROUP BY c.id
-    ORDER BY c.updated_at DESC
-  `)
+
+  getByUserId: async (userId) => {
+    const result = await pool.query(`
+      SELECT
+        c.id,
+        c.title,
+        c.created_at,
+        c.updated_at,
+        (
+          SELECT content
+          FROM messages
+          WHERE conversation_id = c.id
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) AS last_message,
+        (
+          SELECT COUNT(*)::int
+          FROM messages
+          WHERE conversation_id = c.id
+        ) AS message_count
+      FROM conversations c
+      WHERE c.user_id = $1
+      ORDER BY c.updated_at DESC
+    `, [userId]);
+
+    return result.rows;
+  },
+
+  getById: async (id) => {
+    const result = await pool.query(
+      'SELECT * FROM conversations WHERE id = $1',
+      [id]
+    );
+    return result.rows[0] || null;
+  },
+
+  getByIdAndUser: async (id, userId) => {
+    const result = await pool.query(
+      `SELECT *
+       FROM conversations
+       WHERE id = $1 AND user_id = $2`,
+      [id, userId]
+    );
+    return result.rows[0] || null;
+  },
+
+  create: async (id, userId, title) => {
+    return pool.query(
+      `INSERT INTO conversations
+       (id, user_id, title)
+       VALUES ($1, $2, $3)`,
+      [id, userId, title]
+    );
+  },
+
+  updateTitle: async (title, id, userId) => {
+    return pool.query(
+      `UPDATE conversations
+       SET title = $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND user_id = $3`,
+      [title, id, userId]
+    );
+  },
+
+  touchUpdatedAt: async (id) => {
+    return pool.query(
+      `UPDATE conversations
+       SET updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [id]
+    );
+  },
+
+  delete: async (id, userId) => {
+    return pool.query(
+      `DELETE FROM conversations
+       WHERE id = $1 AND user_id = $2`,
+      [id, userId]
+    );
+  },
+
+  deleteByAdmin: async (id) => {
+    return pool.query(
+      'DELETE FROM conversations WHERE id = $1',
+      [id]
+    );
+  },
+
+  getAdminStats: async () => {
+    const result = await pool.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM users) AS total_users,
+        (SELECT COUNT(*)::int FROM users WHERE role = 'admin') AS total_admins,
+        (SELECT COUNT(*)::int FROM conversations) AS total_conversations,
+        (SELECT COUNT(*)::int FROM messages) AS total_messages,
+        (
+          SELECT COUNT(DISTINCT user_id)::int
+          FROM conversations
+          WHERE updated_at >= NOW() - INTERVAL '24 hours'
+        ) AS active_users_24h
+    `);
+
+    return result.rows[0];
+  },
+
+  getAllConversationsForAdmin: async () => {
+    const result = await pool.query(`
+      SELECT
+        c.id,
+        c.user_id,
+        u.username,
+        u.email,
+        c.title,
+        c.created_at,
+        c.updated_at,
+        COUNT(m.id)::int AS message_count
+      FROM conversations c
+      JOIN users u ON c.user_id = u.id
+      LEFT JOIN messages m ON c.id = m.conversation_id
+      GROUP BY c.id, u.username, u.email
+      ORDER BY c.updated_at DESC
+    `);
+
+    return result.rows;
+  },
+
+  getConversationsBySpecificUserForAdmin: async (userId) => {
+    const result = await pool.query(`
+      SELECT
+        c.id,
+        c.user_id,
+        c.title,
+        c.created_at,
+        c.updated_at,
+        COUNT(m.id)::int AS message_count
+      FROM conversations c
+      LEFT JOIN messages m ON c.id = m.conversation_id
+      WHERE c.user_id = $1
+      GROUP BY c.id
+      ORDER BY c.updated_at DESC
+    `, [userId]);
+
+    return result.rows;
+  }
 };
 
-// Message operations
+/*
+ * MESSAGE QUERIES
+ */
 const messageQueries = {
-  getByConversationId: db.prepare(`
-    SELECT id, conversation_id, role, content, created_at 
-    FROM messages 
-    WHERE conversation_id = ? 
-    ORDER BY created_at ASC
-  `),
-  add: db.prepare(`
-    INSERT INTO messages (conversation_id, role, content)
-    VALUES (?, ?, ?)
-  `),
-  getRecentContext: db.prepare(`
-    SELECT role, content 
-    FROM messages 
-    WHERE conversation_id = ? 
-    ORDER BY created_at DESC 
-    LIMIT ?
-  `)
+
+  getByConversationId: async (conversationId) => {
+    const result = await pool.query(`
+      SELECT id, conversation_id, role, content, created_at
+      FROM messages
+      WHERE conversation_id = $1
+      ORDER BY created_at ASC
+    `, [conversationId]);
+
+    return result.rows;
+  },
+
+  add: async (conversationId, role, content) => {
+    const result = await pool.query(`
+      INSERT INTO messages
+      (conversation_id, role, content)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `, [conversationId, role, content]);
+
+    return result.rows[0];
+  },
+
+  getRecentContext: async (conversationId, limit) => {
+    const result = await pool.query(`
+      SELECT role, content
+      FROM messages
+      WHERE conversation_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `, [conversationId, limit]);
+
+    return result.rows;
+  }
 };
 
 module.exports = {
-  db,
+  pool,
   initDatabase,
   userQueries,
   conversationQueries,

@@ -1,19 +1,28 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+
 const { userQueries } = require('../db/database');
-const { generateToken, authenticateToken, validateRegistrationInput } = require('../middleware/auth');
+const {
+  generateToken,
+  authenticateToken,
+  validateRegistrationInput
+} = require('../middleware/auth');
 
 /**
  * POST /api/auth/register
- * Register a new user account
+ * Register a new user
  */
 router.post('/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
-    // Validation
-    const validationErrors = validateRegistrationInput(username, email, password);
+    const validationErrors = validateRegistrationInput(
+      username,
+      email,
+      password
+    );
+
     if (validationErrors.length > 0) {
       return res.status(400).json({
         success: false,
@@ -24,8 +33,9 @@ router.post('/register', async (req, res) => {
     const cleanUsername = username.trim();
     const cleanEmail = email.trim().toLowerCase();
 
-    // Check if email already taken
-    const existingByEmail = userQueries.getByEmail.get(cleanEmail);
+    // Check email
+    const existingByEmail = await userQueries.getByEmail(cleanEmail);
+
     if (existingByEmail) {
       return res.status(409).json({
         success: false,
@@ -33,8 +43,10 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Check if username already taken
-    const existingByUsername = userQueries.getByUsername.get(cleanUsername);
+    // Check username
+    const existingByUsername =
+      await userQueries.getByUsername(cleanUsername);
+
     if (existingByUsername) {
       return res.status(409).json({
         success: false,
@@ -42,31 +54,38 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Hash password with bcrypt (salt cost 12)
-    const saltRounds = 12;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
+    // Hash password
+    const passwordHash = await bcrypt.hash(password, 12);
 
-    // Determine initial role: Check against configured admin email or first account
-    const configuredAdminEmail = (process.env.ADMIN_EMAIL || '').toLowerCase().trim();
-    const totalUsers = userQueries.getUserCount.get().count;
-    const role = (configuredAdminEmail && cleanEmail === configuredAdminEmail) || totalUsers === 0 ? 'admin' : 'user';
+    // Determine role
+    const configuredAdminEmail =
+      (process.env.ADMIN_EMAIL || '').toLowerCase().trim();
 
-    // Insert user
-    const result = userQueries.create.run(cleanUsername, cleanEmail, passwordHash, role);
-    const userId = result.lastInsertRowid;
+    const userCountResult = await userQueries.getUserCount();
+    const totalUsers = Number(userCountResult.count);
 
-    // Fetch user without password
-    const newUser = userQueries.getById.get(userId);
+    const role =
+      (configuredAdminEmail && cleanEmail === configuredAdminEmail) ||
+      totalUsers === 0
+        ? 'admin'
+        : 'user';
 
-    // Generate token
+    // Create user
+    const newUser = await userQueries.create(
+      cleanUsername,
+      cleanEmail,
+      passwordHash,
+      role
+    );
+
     const token = generateToken(newUser);
 
-    // Set cookie
+    // Cookie
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
     return res.status(201).json({
@@ -81,18 +100,21 @@ router.post('/register', async (req, res) => {
       },
       token
     });
+
   } catch (err) {
     console.error('Registration error:', err);
+
     return res.status(500).json({
       success: false,
-      error: 'An unexpected error occurred during registration. Please try again.'
+      error: 'An unexpected error occurred during registration.'
     });
   }
 });
 
+
 /**
  * POST /api/auth/login
- * Authenticate user with credentials
+ * Login user
  */
 router.post('/login', async (req, res) => {
   try {
@@ -107,12 +129,16 @@ router.post('/login', async (req, res) => {
 
     const cleanIdentifier = loginIdentifier.trim();
 
-    // Look up user by email or username
-    let user = null;
+    let user;
+
     if (cleanIdentifier.includes('@')) {
-      user = userQueries.getByEmail.get(cleanIdentifier.toLowerCase());
+      user = await userQueries.getByEmail(
+        cleanIdentifier.toLowerCase()
+      );
     } else {
-      user = userQueries.getByUsername.get(cleanIdentifier);
+      user = await userQueries.getByUsername(
+        cleanIdentifier
+      );
     }
 
     if (!user) {
@@ -122,8 +148,12 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Securely compare password hash with bcrypt
-    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    // Compare password
+    const passwordMatch = await bcrypt.compare(
+      password,
+      user.password_hash
+    );
+
     if (!passwordMatch) {
       return res.status(401).json({
         success: false,
@@ -131,13 +161,12 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Update last login timestamp
-    userQueries.updateLastLogin.run(user.id);
+    // Update login time
+    await userQueries.updateLastLogin(user.id);
 
-    // Issue JWT
+    // Generate JWT
     const token = generateToken(user);
 
-    // Set cookie
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -158,119 +187,143 @@ router.post('/login', async (req, res) => {
       },
       token
     });
+
   } catch (err) {
     console.error('Login error:', err);
+
     return res.status(500).json({
       success: false,
-      error: 'An unexpected error occurred during login. Please try again.'
+      error: 'An unexpected error occurred during login.'
     });
   }
 });
 
+
 /**
  * POST /api/auth/logout
- * Log out user by clearing cookie
  */
 router.post('/logout', (req, res) => {
   res.clearCookie('token');
+
   return res.json({
     success: true,
     message: 'Logged out successfully.'
   });
 });
 
+
 /**
  * GET /api/auth/me
- * Get current authenticated user profile
  */
-router.get('/me', authenticateToken, (req, res) => {
-  const user = userQueries.getById.get(req.user.id);
-  if (!user) {
-    return res.status(404).json({
-      success: false,
-      error: 'User not found.'
-    });
-  }
-
-  return res.json({
-    success: true,
-    user: {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      role: user.role,
-      createdAt: user.created_at,
-      lastLoginAt: user.last_login_at
-    }
-  });
-});
-
-/**
- * PATCH /api/auth/change-password
- * Change password for authenticated user
- */
-router.patch('/change-password', authenticateToken, async (req, res) => {
-  console.log('[CHANGE PASSWORD HIT]', {
-    userId: req.user?.id,
-    time: new Date().toISOString()
-  });
+router.get('/me', authenticateToken, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const user = await userQueries.getById(req.user.id);
 
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({
+    if (!user) {
+      return res.status(404).json({
         success: false,
-        error: 'Both current password and new password are required.'
+        error: 'User not found.'
       });
-    }
-
-    if (newPassword.length < 6) {
-      return res.status(400).json({
-        success: false,
-        error: 'New password must be at least 6 characters long.'
-      });
-    }
-
-    const userWithHash = userQueries.getByIdWithPassword.get(req.user.id);
-    const isMatch = await bcrypt.compare(currentPassword, userWithHash.password_hash);
-    if (!isMatch) {
-      return res.status(400).json({
-        success: false,
-        error: 'Incorrect current password.'
-      });
-    }
-
-    const newHash = await bcrypt.hash(newPassword, 12);
-
-    const result = userQueries.updatePassword.run(
-      newHash,
-      req.user.id
-    );
-
-    console.log('[PASSWORD CHANGE]', {
-     userId: req.user.id,
-      changes: result.changes
-    });
-
-    if (result.changes !== 1) {
-    return res.status(500).json({
-      success: false,
-      error: 'Password was not updated in database.'
-    });
     }
 
     return res.json({
       success: true,
-      message: 'Password updated successfully.'
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        createdAt: user.created_at,
+        lastLoginAt: user.last_login_at
+      }
     });
+
   } catch (err) {
-    console.error('Password change error:', err);
+    console.error('Profile error:', err);
+
     return res.status(500).json({
       success: false,
-      error: 'Failed to update password.'
+      error: 'Failed to retrieve user profile.'
     });
   }
 });
 
-module.exports = router;
 
+/**
+ * PATCH /api/auth/change-password
+ */
+router.patch(
+  '/change-password',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { currentPassword, newPassword } = req.body;
+
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({
+          success: false,
+          error: 'Both current password and new password are required.'
+        });
+      }
+
+      if (newPassword.length < 6) {
+        return res.status(400).json({
+          success: false,
+          error: 'New password must be at least 6 characters long.'
+        });
+      }
+
+      const user = await userQueries.getByIdWithPassword(
+        req.user.id
+      );
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found.'
+        });
+      }
+
+      const isMatch = await bcrypt.compare(
+        currentPassword,
+        user.password_hash
+      );
+
+      if (!isMatch) {
+        return res.status(400).json({
+          success: false,
+          error: 'Incorrect current password.'
+        });
+      }
+
+      const newHash = await bcrypt.hash(newPassword, 12);
+
+      const result = await userQueries.updatePassword(
+        newHash,
+        req.user.id
+      );
+
+      if (result.rowCount !== 1) {
+        return res.status(500).json({
+          success: false,
+          error: 'Password was not updated in database.'
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: 'Password updated successfully.'
+      });
+
+    } catch (err) {
+      console.error('Password change error:', err);
+
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update password.'
+      });
+    }
+  }
+);
+
+module.exports = router;
