@@ -25,7 +25,7 @@ function generateFallbackResponse(userPrompt, conversationHistory = []) {
     return `Here is a clean code example based on your request:\n\n\`\`\`javascript\n// Secure verification pattern\nasync function authenticate(credentials) {\n  const user = await findUserByEmail(credentials.email);\n  if (!user) return null;\n  \n  const isValid = await bcrypt.compare(credentials.password, user.passwordHash);\n  return isValid ? user : null;\n}\n\`\`\`\n\nLet me know if you need modifications or other language examples!`;
   }
 
-  return `Thank you for your message! 🤖\n\n> "${userPrompt}"\n\nI have securely processed your prompt. Your conversation is saved to the SQLite database and linked exclusively to your user account.\n\n*(Tip: Add your \`GEMINI_API_KEY\` in \`.env\` to enable real-time Gemini LLM inference for answers to any domain).*`;
+  return `Thank you for your message! 🤖\n\n> "${userPrompt}"\n\nI have securely processed your prompt. Your conversation is saved to the SQLite database and linked exclusively to your user account.\n\n**`;
 }
 
 /**
