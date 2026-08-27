@@ -13,84 +13,261 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 router.use(authenticateToken);
 
 /**
- * Helper: Smart fallback response generator
- * Used when Gemini API key is not configured
- * or Gemini API call fails.
+ * ============================================================
+ * AEGIS AI SYSTEM IDENTITY
+ * ============================================================
  */
+
+const AEGIS_SYSTEM_INSTRUCTION = `
+You are Aegis AI, a helpful, intelligent, friendly and accurate AI assistant.
+
+Your name is Aegis AI.
+
+You were created and developed by Prathmesh Kadam.
+
+IMPORTANT IDENTITY RULES:
+
+If the user asks:
+- Who created you?
+- Who developed you?
+- Who made you?
+- Who is your developer?
+- Who is your creator?
+- Who built you?
+- Who designed you?
+- Who programmed you?
+- Who is behind you?
+- Who owns/developed Aegis AI?
+
+Clearly answer:
+"I was created and developed by Prathmesh Kadam."
+
+If the user asks "Who are you?", answer:
+"I am Aegis AI, an AI assistant created and developed by Prathmesh Kadam."
+
+If the user asks what model powers you, you may explain that you are powered by Google's Gemini model through the Gemini API.
+
+Do not introduce yourself as Gemini when the user simply asks who you are.
+
+You are Aegis AI, not Gemini.
+
+Be helpful, accurate, friendly, and concise.
+`;
+
+
+/**
+ * ============================================================
+ * FALLBACK RESPONSE
+ * ============================================================
+ *
+ * Used when:
+ * 1. Gemini API key is missing
+ * 2. Gemini API request fails
+ *
+ * This fallback must still behave like Aegis AI.
+ */
+
 function generateFallbackResponse(userPrompt, conversationHistory = []) {
   const promptLower = userPrompt.toLowerCase().trim();
 
-  if (
-    promptLower.includes('hello') ||
-    promptLower.includes('hi') ||
-    promptLower.includes('hey')
-  ) {
-    return `Hello! 👋 I am your secure AI Assistant.
+  // ----------------------------------------------------------
+  // Identity / Developer questions
+  // ----------------------------------------------------------
 
-I am ready to help you with coding, answering questions, brainstorming ideas, analyzing data, and more.
+  const developerQuestion =
+    /\b(who\s+(created|developed|made|built|designed|programmed)\s+(you|aegis))\b/i.test(
+      promptLower
+    ) ||
+    /\b(who\s+is\s+(your|the)\s+(developer|creator|maker|programmer))\b/i.test(
+      promptLower
+    ) ||
+    promptLower.includes('who developed you') ||
+    promptLower.includes('who created you') ||
+    promptLower.includes('who made you') ||
+    promptLower.includes('who built you') ||
+    promptLower.includes('who is your developer') ||
+    promptLower.includes('who is your creator');
 
-*Note: To connect to live Google Gemini models, make sure your \`GEMINI_API_KEY\` is configured in the \`.env\` file.*`;
+  if (developerQuestion) {
+    return `I was created and developed by Prathmesh Kadam.`;
   }
+
+  // ----------------------------------------------------------
+  // Who are you?
+  // ----------------------------------------------------------
 
   if (
     promptLower.includes('who are you') ||
-    promptLower.includes('what can you do')
+    promptLower.includes('what are you') ||
+    promptLower.includes('introduce yourself')
   ) {
-    return `I am an AI Chatbot Assistant running on a secure full-stack architecture with:
+    return `I am Aegis AI, an AI assistant created and developed by Prathmesh Kadam.
 
-- 🔐 Authentication & RBAC
-- 🗄️ PostgreSQL database with user isolation
-- 👑 Admin Portal
-- ⚡ Google Gemini Integration
-- 💬 Persistent conversations and messages
+I can help you with coding, programming, mathematics, technical questions, explanations, brainstorming, and many other tasks.`;
+  }
+
+  // ----------------------------------------------------------
+  // Greeting
+  // ----------------------------------------------------------
+
+  if (
+    /^(hello|hi|hey|hii|helo|good morning|good afternoon|good evening)[!.,\s]*$/i.test(
+      promptLower
+    )
+  ) {
+    return `Hello! 👋
+
+I am Aegis AI, an AI assistant created and developed by Prathmesh Kadam.
 
 How can I help you today?`;
   }
 
+  // ----------------------------------------------------------
+  // What is Python?
+  // ----------------------------------------------------------
+
   if (
-    promptLower.includes('code') ||
-    promptLower.includes('javascript') ||
-    promptLower.includes('python')
+    promptLower === 'what is python' ||
+    promptLower === 'what is python?' ||
+    promptLower.includes('what is python language') ||
+    promptLower.includes('define python')
   ) {
-    return `Here is a clean JavaScript example:
+    return `## What is Python? 🐍
 
-\`\`\`javascript
-async function authenticate(credentials) {
-  const user = await findUserByEmail(credentials.email);
+Python is a **high-level, interpreted, general-purpose programming language** known for its simple and readable syntax.
 
-  if (!user) {
-    return null;
-  }
+### Main features of Python:
+- Easy to learn and use
+- Simple and readable syntax
+- Interpreted language
+- Object-oriented programming support
+- Large collection of libraries
+- Cross-platform
+- Used in AI, Machine Learning, Data Science, Web Development, Automation, and more
 
-  const isValid = await bcrypt.compare(
-    credentials.password,
-    user.passwordHash
-  );
+### Simple example:
 
-  return isValid ? user : null;
-}
+\`\`\`python
+print("Hello, World!")
 \`\`\`
 
-Let me know if you need modifications or another language example!`;
+This program displays:
+
+\`\`\`
+Hello, World!
+\`\`\`
+
+Python is especially popular for beginners because its syntax is relatively easy to understand.`;
   }
+
+  // ----------------------------------------------------------
+  // Python programming questions
+  // ----------------------------------------------------------
+
+  if (
+    promptLower.includes('python') &&
+    (
+      promptLower.includes('program') ||
+      promptLower.includes('code') ||
+      promptLower.includes('example') ||
+      promptLower.includes('syntax')
+    )
+  ) {
+    return `Sure! 🐍
+
+Here is a simple Python example:
+
+\`\`\`python
+name = "Prathmesh"
+print("Hello", name)
+\`\`\`
+
+Output:
+
+\`\`\`
+Hello Prathmesh
+\`\`\`
+
+If you give me the exact Python problem, I can explain and solve it step by step.`;
+  }
+
+  // ----------------------------------------------------------
+  // JavaScript questions
+  // ----------------------------------------------------------
+
+  if (
+    promptLower.includes('javascript') ||
+    promptLower.includes('js code')
+  ) {
+    return `Here is a simple JavaScript example:
+
+\`\`\`javascript
+const name = "Prathmesh";
+
+console.log("Hello " + name);
+\`\`\`
+
+Output:
+
+\`\`\`
+Hello Prathmesh
+\`\`\``;
+  }
+
+  // ----------------------------------------------------------
+  // General coding question
+  // ----------------------------------------------------------
+
+  if (
+    promptLower.includes('code') ||
+    promptLower.includes('programming')
+  ) {
+    return `Sure! 💻
+
+Please tell me:
+1. Which programming language you want
+2. What you want the program to do
+
+For example:
+
+\`\`\`
+Write a Python program to find the largest of three numbers.
+\`\`\`
+
+I'll provide the code and explain the logic.`;
+  }
+
+  // ----------------------------------------------------------
+  // Default fallback
+  // ----------------------------------------------------------
 
   return `Thank you for your message! 🤖
 
-> "${userPrompt}"
+I am Aegis AI, created and developed by Prathmesh Kadam.
 
-I have securely processed your prompt and saved this conversation to your account.`;
+Your message has been securely processed and your conversation is saved to your account.
+
+If you want, ask me a question and I'll help you with it.`;
 }
 
+
 /**
+ * ============================================================
  * POST /api/chat
+ * ============================================================
+ *
  * Send a message, get AI response,
- * and persist exchange in PostgreSQL database.
+ * and persist exchange in PostgreSQL.
  */
+
 router.post('/', async (req, res) => {
   try {
     let { conversationId, message } = req.body;
 
+    // ----------------------------------------------------------
     // Validate message
+    // ----------------------------------------------------------
+
     if (
       !message ||
       typeof message !== 'string' ||
@@ -104,9 +281,9 @@ router.post('/', async (req, res) => {
 
     const cleanMessage = message.trim();
 
-    // --------------------------------------------------
+    // ----------------------------------------------------------
     // 1. Verify or create conversation
-    // --------------------------------------------------
+    // ----------------------------------------------------------
 
     let isNewConversation = false;
 
@@ -140,9 +317,9 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // --------------------------------------------------
+    // ----------------------------------------------------------
     // 2. Save user's message
-    // --------------------------------------------------
+    // ----------------------------------------------------------
 
     const userMsgResult = await messageQueries.add(
       conversationId,
@@ -154,9 +331,9 @@ router.post('/', async (req, res) => {
       conversationId
     );
 
-    // --------------------------------------------------
+    // ----------------------------------------------------------
     // 3. Get recent conversation context
-    // --------------------------------------------------
+    // ----------------------------------------------------------
 
     const recentMessages = (
       await messageQueries.getRecentContext(
@@ -165,9 +342,9 @@ router.post('/', async (req, res) => {
       )
     ).reverse();
 
-    // --------------------------------------------------
+    // ----------------------------------------------------------
     // 4. Generate AI response
-    // --------------------------------------------------
+    // ----------------------------------------------------------
 
     let assistantResponseText = '';
 
@@ -179,30 +356,18 @@ router.post('/', async (req, res) => {
         const genAI =
           new GoogleGenerativeAI(geminiApiKey);
 
-        const model = genAI.getGenerativeModel({
-          model: 'gemini-3.6-flash',
-           systemInstruction: `
-        You are Aegis AI, a helpful and intelligent AI assistant.
+        const model =
+          genAI.getGenerativeModel({
+            model: 'gemini-3.6-flash',
 
-        Your name is Aegis AI.
+            systemInstruction:
+              AEGIS_SYSTEM_INSTRUCTION
+          });
 
-        You were created and developed by Prathmesh Kadam.
+        // ------------------------------------------------------
+        // Build Gemini conversation history
+        // ------------------------------------------------------
 
-        If someone asks "Who created you?", "Who developed you?",
-        "Who made you?", or similar questions, clearly answer:
-        "I was created and developed by Prathmesh Kadam."
-
-        If someone asks "Who are you?", introduce yourself as:
-        "I am Aegis AI, an AI assistant created and developed by Prathmesh Kadam."
-
-        Never introduce yourself as Gemini unless the user specifically asks which underlying AI model powers you.
-
-        Be helpful, accurate, friendly, and concise.
-        `
-        });
-
-        // Gemini history must start with user
-        // and alternate between user/model.
         const historyForGemini = [];
 
         let expectedRole = 'user';
@@ -213,6 +378,7 @@ router.post('/', async (req, res) => {
               ? 'model'
               : 'user';
 
+          // Gemini requires alternating user/model history.
           if (role === expectedRole) {
             historyForGemini.push({
               role,
@@ -230,14 +396,23 @@ router.post('/', async (req, res) => {
           }
         }
 
-        const chatSession = model.startChat({
-          history: historyForGemini,
+        // ------------------------------------------------------
+        // Start Gemini chat session
+        // ------------------------------------------------------
 
-          generationConfig: {
-            maxOutputTokens: 2048,
-            temperature: 0.7
-          }
-        });
+        const chatSession =
+          model.startChat({
+            history: historyForGemini,
+
+            generationConfig: {
+              maxOutputTokens: 2048,
+              temperature: 0.7
+            }
+          });
+
+        // ------------------------------------------------------
+        // Send current user message
+        // ------------------------------------------------------
 
         const result =
           await chatSession.sendMessage(
@@ -250,9 +425,19 @@ router.post('/', async (req, res) => {
         assistantResponseText =
           response.text();
 
+        // Safety check
+        if (
+          !assistantResponseText ||
+          assistantResponseText.trim().length === 0
+        ) {
+          throw new Error(
+            'Gemini returned an empty response.'
+          );
+        }
+
       } catch (aiErr) {
         console.warn(
-          '[AI] Gemini API call error, using fallback:',
+          '[AI] Gemini API call error, using Aegis fallback:',
           aiErr.message
         );
 
@@ -264,7 +449,14 @@ router.post('/', async (req, res) => {
       }
 
     } else {
-      // Offline fallback mode
+      // --------------------------------------------------------
+      // Gemini API key not configured
+      // --------------------------------------------------------
+
+      console.warn(
+        '[AI] GEMINI_API_KEY is not configured. Using fallback.'
+      );
+
       assistantResponseText =
         generateFallbackResponse(
           cleanMessage,
@@ -272,9 +464,9 @@ router.post('/', async (req, res) => {
         );
     }
 
-    // --------------------------------------------------
+    // ----------------------------------------------------------
     // 5. Save assistant response
-    // --------------------------------------------------
+    // ----------------------------------------------------------
 
     const assistantMsgResult =
       await messageQueries.add(
@@ -287,9 +479,9 @@ router.post('/', async (req, res) => {
       conversationId
     );
 
-    // --------------------------------------------------
+    // ----------------------------------------------------------
     // 6. Auto-update conversation title
-    // --------------------------------------------------
+    // ----------------------------------------------------------
 
     let updatedTitle = null;
 
@@ -320,9 +512,9 @@ router.post('/', async (req, res) => {
       updatedTitle = generatedTitle;
     }
 
-    // --------------------------------------------------
-    // 7. Send response
-    // --------------------------------------------------
+    // ----------------------------------------------------------
+    // 7. Send response to frontend
+    // ----------------------------------------------------------
 
     return res.json({
       success: true,
