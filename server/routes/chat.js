@@ -338,7 +338,7 @@ router.post('/', async (req, res) => {
     const recentMessages = (
       await messageQueries.getRecentContext(
         conversationId,
-        10
+        20
       )
     ).reverse();
 
@@ -358,7 +358,7 @@ router.post('/', async (req, res) => {
 
         const model =
           genAI.getGenerativeModel({
-            model: 'gemini-3.5-flash',
+            model: 'gemini-3.5-flash-lite',
 
             systemInstruction:
               AEGIS_SYSTEM_INSTRUCTION
