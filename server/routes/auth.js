@@ -210,6 +210,10 @@ router.get('/me', authenticateToken, (req, res) => {
  * Change password for authenticated user
  */
 router.patch('/change-password', authenticateToken, async (req, res) => {
+  console.log('[CHANGE PASSWORD HIT]', {
+    userId: req.user?.id,
+    time: new Date().toISOString()
+  });
   try {
     const { currentPassword, newPassword } = req.body;
 
