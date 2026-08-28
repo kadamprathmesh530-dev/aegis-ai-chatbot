@@ -9,6 +9,7 @@ const {
 
 const { authenticateToken } = require('../middleware/auth');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 
 router.use(authenticateToken);
 
