@@ -10,7 +10,48 @@ const {
 const { authenticateToken } = require('../middleware/auth');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleGenAI } = require('@google/genai');
+const { tavily } = require('@tavily/core');
+const tavilyClient = tavily({
+    apiKey: process.env.TAVILY_API_KEY
+});
+const webAI = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY
+});
 
+async function testWebSearch(query) {
+    const response = await webAI.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents: query,
+        config: {
+            tools: [
+                {
+                    googleSearch: {}
+                }
+            ]
+        }
+    });
+
+    return response;
+}
+
+router.get('/test-web-search', async (req, res) => {
+    try {
+        const result = await testWebSearch(
+            'What is the latest major news in India today?'
+        );
+
+        res.json({
+            success: true,
+            text: result.text
+        });
+    } catch (error) {
+        console.error('[WEB SEARCH TEST ERROR]', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
 router.use(authenticateToken);
 
 /**
@@ -512,104 +553,23 @@ If you want, ask me a question and I'll help you with it.`;
  * and persist exchange in PostgreSQL.
  */
 
-router.post('/', async (req, res) => {
-  try {
-    let { conversationId, message } = req.body;
+// ============================================================
+// AI RESPONSE GENERATOR
+// ============================================================
 
-    // ----------------------------------------------------------
-    // Validate message
-    // ----------------------------------------------------------
-
-    if (
-      !message ||
-      typeof message !== 'string' ||
-      message.trim().length === 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        error: 'Message content is required.'
-      });
-    }
-
-    const cleanMessage = message.trim();
-
-    // ----------------------------------------------------------
-    // 1. Verify or create conversation
-    // ----------------------------------------------------------
-
-    let isNewConversation = false;
-
-    if (!conversationId) {
-      conversationId = uuidv4();
-
-      const initialTitle =
-        cleanMessage.length > 40
-          ? `${cleanMessage.substring(0, 40)}...`
-          : cleanMessage;
-
-      await conversationQueries.create(
-        conversationId,
-        req.user.id,
-        initialTitle
-      );
-
-      isNewConversation = true;
-    } else {
-      const existingConv =
-        await conversationQueries.getByIdAndUser(
-          conversationId,
-          req.user.id
-        );
-
-      if (!existingConv) {
-        return res.status(404).json({
-          success: false,
-          error: 'Conversation not found or access denied.'
-        });
-      }
-    }
-
-    // ----------------------------------------------------------
-    // 2. Save user's message
-    // ----------------------------------------------------------
-
-    const userMsgResult = await messageQueries.add(
-      conversationId,
-      'user',
-      cleanMessage
-    );
-
-    await conversationQueries.touchUpdatedAt(
-      conversationId
-    );
-
-    // ----------------------------------------------------------
-    // 3. Get recent conversation context
-    // ----------------------------------------------------------
-
-    const recentMessages = (
-      await messageQueries.getRecentContext(
-        conversationId,
-        20
-      )
-    ).reverse();
-
-    // ----------------------------------------------------------
-    // 4. Generate AI response
-    // ----------------------------------------------------------
-
-    let assistantResponseText = '';
-async function generateWithRetry(genAI, modelName, chatHistory, message) {
-  // Model priority / automatic fallback
+async function generateWithRetry(
+  genAI,
+  modelName,
+  chatHistory,
+  message
+) {
   const modelFallbacks = [
     modelName,
-    'gemini-3.5-flash',
     'gemini-3.5-flash-lite',
     'gemini-3.6-flash',
     'gemini-2.5-flash'
   ];
 
-  // Remove duplicate models
   const modelsToTry = [...new Set(modelFallbacks)];
 
   for (const currentModel of modelsToTry) {
@@ -629,55 +589,265 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
         }
       });
 
-      const result = await chatSession.sendMessage(message);
+      const result =
+        await chatSession.sendMessage(message);
 
-      console.log(`[AI] ${currentModel} succeeded.`);
+      console.log(
+        `[AI] ${currentModel} succeeded.`
+      );
 
       return result;
 
     } catch (error) {
-      const errorMessage = error?.message || String(error);
-
       console.warn(
-        `[AI] ${currentModel} unavailable. Trying next model...`,
-        errorMessage
+        `[AI] ${currentModel} failed:`,
+        error?.message || error
       );
-
-      // Move automatically to the next model
-      continue;
     }
   }
 
-  // All models failed
-  throw new Error('All configured AI models are currently unavailable.');
+  throw new Error(
+    'All configured AI models are currently unavailable.'
+  );
 }
+
+
+// ============================================================
+// WEB SEARCH
+// ============================================================
+
+async function generateWebSearchResponse(query) {
+  console.log('[WEB SEARCH] Searching with Tavily:', query);
+
+  const searchResult = await tavilyClient.search(query, {
+    searchDepth: 'advanced',
+    maxResults: 5,
+    includeAnswer: true
+  });
+
+  if (!searchResult) {
+    throw new Error('Tavily returned no result.');
+  }
+
+  const results = searchResult.results || [];
+
+  if (results.length === 0) {
+    throw new Error('Tavily returned no search results.');
+  }
+
+  const sourceLinks = results.map((item, index) => ({
+    number: index + 1,
+    title: item.title,
+    url: item.url
+  }));
+
+  const researchText = results
+    .map((item, index) =>
+      `SOURCE ${index + 1}
+Title: ${item.title}
+URL: ${item.url}
+Content: ${item.content || ''}`
+    )
+    .join('\n\n');
+
+  const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
+
+  if (!geminiApiKey) {
+    throw new Error('GEMINI_API_KEY is not configured.');
+  }
+
+  const genAI = new GoogleGenerativeAI(geminiApiKey);
+
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-3.6-flash',
+    systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+  });
+
+  const prompt = `
+You are Aegis AI.
+
+The user asked:
+"${query}"
+
+Use the following fresh web-search results from Tavily:
+
+${researchText}
+
+Give the user a clean, accurate answer based ONLY on the useful information from these search results.
+
+Rules:
+- Do NOT copy raw webpage navigation text.
+- Do NOT include things like "Edition", "IN", "US", "GCC", language menus, Sign In, Subscribe, Trending Topics, etc.
+- Do NOT dump the complete search results.
+- Summarize the important information.
+- If this is a news question, give the most important recent stories first.
+- Use clear headings and bullet points where useful.
+- Mention uncertainty when the sources disagree or information is incomplete.
+- Do not invent facts.
+`;
+
+  const result = await model.generateContent(prompt);
+
+  const response = await result.response;
+  const text = response.text();
+
+  if (!text || text.trim().length === 0) {
+    throw new Error('Gemini returned an empty answer.');
+  }
+
+  console.log('[WEB SEARCH] Tavily + Gemini completed.');
+
+  return {
+    text: text.trim(),
+    sources: sourceLinks
+  };
+}
+
+
+// ============================================================
+// POST /api/chat
+// ============================================================
+
+router.post('/', async (req, res) => {
+
+  try {
+
+    let {
+      conversationId,
+      message
+    } = req.body;
+
+
+    // ========================================================
+    // 1. VALIDATE MESSAGE
+    // ========================================================
+
+    if (
+      !message ||
+      typeof message !== 'string' ||
+      message.trim().length === 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'Message content is required.'
+      });
+    }
+
+    const cleanMessage =
+      message.trim();
+
+    let webSources = [];
+
+
+    // ========================================================
+    // 2. CREATE / VERIFY CONVERSATION
+    // ========================================================
+
+    let isNewConversation = false;
+
+    if (!conversationId) {
+
+      conversationId = uuidv4();
+
+      const initialTitle =
+        cleanMessage.length > 40
+          ? `${cleanMessage.substring(0, 40)}...`
+          : cleanMessage;
+
+      await conversationQueries.create(
+        conversationId,
+        req.user.id,
+        initialTitle
+      );
+
+      isNewConversation = true;
+
+    } else {
+
+      const existingConv =
+        await conversationQueries.getByIdAndUser(
+          conversationId,
+          req.user.id
+        );
+
+      if (!existingConv) {
+        return res.status(404).json({
+          success: false,
+          error:
+            'Conversation not found or access denied.'
+        });
+      }
+    }
+
+
+    // ========================================================
+    // 3. SAVE USER MESSAGE
+    // ========================================================
+
+    const userMsgResult =
+      await messageQueries.add(
+        conversationId,
+        'user',
+        cleanMessage
+      );
+
+    await conversationQueries.touchUpdatedAt(
+      conversationId
+    );
+
+
+    // ========================================================
+    // 4. GET CONVERSATION HISTORY
+    // ========================================================
+
+    const recentMessages = (
+      await messageQueries.getRecentContext(
+        conversationId,
+        20
+      )
+    ).reverse();
+
+
+    // ========================================================
+    // 5. GENERATE AI RESPONSE
+    // ========================================================
+
+    let assistantResponseText = '';
+
 
     const geminiApiKey =
       (process.env.GEMINI_API_KEY || '').trim();
 
+
     if (geminiApiKey) {
+
       try {
+
         const genAI =
-          new GoogleGenerativeAI(geminiApiKey);
+          new GoogleGenerativeAI(
+            geminiApiKey
+          );
 
-        
 
-        // ------------------------------------------------------
-        // Build Gemini conversation history
-        // ------------------------------------------------------
+        // ----------------------------------------------------
+        // Build Gemini history
+        // ----------------------------------------------------
 
         const historyForGemini = [];
 
         let expectedRole = 'user';
 
-        for (const m of recentMessages.slice(0, -1)) {
+        for (
+          const m of recentMessages.slice(0, -1)
+        ) {
+
           const role =
             m.role === 'assistant'
               ? 'model'
               : 'user';
 
-          // Gemini requires alternating user/model history.
           if (role === expectedRole) {
+
             historyForGemini.push({
               role,
               parts: [
@@ -694,42 +864,79 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
           }
         }
 
-        // ------------------------------------------------------
-        // Start Gemini chat session
-        // ------------------------------------------------------
 
-        
+        // ----------------------------------------------------
+        // Decide whether web search is needed
+        // ----------------------------------------------------
 
-        // ------------------------------------------------------
-        // Send current user message
-        // ------------------------------------------------------
+        const needsWebSearch =
+          /latest|today|news|current|recent|weather|price|stock|score|live|2026/i
+            .test(cleanMessage);
 
-        const result = await generateWithRetry(
-          genAI,
-          'gemini-3.5-flash',
-          historyForGemini,
-          cleanMessage
-        );
 
-        const response =
-          await result.response;
+        // ----------------------------------------------------
+        // WEB SEARCH
+        // ----------------------------------------------------
 
-        assistantResponseText =
-          response.text();
+        if (needsWebSearch) {
 
+          console.log(
+            '[WEB SEARCH] Using web search for:',
+            cleanMessage
+          );
+
+          const webResult =
+            await generateWebSearchResponse(
+              cleanMessage
+            );
+
+          assistantResponseText =
+            webResult.text;
+
+          webSources =
+            webResult.sources || [];
+
+
+        } else {
+
+          // --------------------------------------------------
+          // NORMAL GEMINI RESPONSE
+          // --------------------------------------------------
+
+          const result =
+            await generateWithRetry(
+              genAI,
+              'gemini-3.5-flash',
+              historyForGemini,
+              cleanMessage
+            );
+
+          const response =
+            await result.response;
+
+          assistantResponseText =
+            response.text();
+        }
+
+
+        // ----------------------------------------------------
         // Safety check
+        // ----------------------------------------------------
+
         if (
           !assistantResponseText ||
           assistantResponseText.trim().length === 0
         ) {
           throw new Error(
-            'Gemini returned an empty response.'
+            'AI returned an empty response.'
           );
         }
 
+
       } catch (aiErr) {
+
         console.warn(
-          '[AI] Gemini API call error, using Aegis fallback:',
+          '[AI] Gemini error. Using Aegis fallback:',
           aiErr.message
         );
 
@@ -740,13 +947,15 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
           );
       }
 
+
     } else {
-      // --------------------------------------------------------
-      // Gemini API key not configured
-      // --------------------------------------------------------
+
+      // ======================================================
+      // GEMINI API KEY NOT CONFIGURED
+      // ======================================================
 
       console.warn(
-        '[AI] GEMINI_API_KEY is not configured. Using fallback.'
+        '[AI] GEMINI_API_KEY is not configured.'
       );
 
       assistantResponseText =
@@ -756,9 +965,10 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
         );
     }
 
-    // ----------------------------------------------------------
-    // 5. Save assistant response
-    // ----------------------------------------------------------
+
+    // ========================================================
+    // 6. SAVE ASSISTANT RESPONSE
+    // ========================================================
 
     const assistantMsgResult =
       await messageQueries.add(
@@ -771,9 +981,10 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
       conversationId
     );
 
-    // ----------------------------------------------------------
-    // 6. Auto-update conversation title
-    // ----------------------------------------------------------
+
+    // ========================================================
+    // 7. UPDATE CONVERSATION TITLE
+    // ========================================================
 
     let updatedTitle = null;
 
@@ -790,6 +1001,7 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
         isNewConversation
       )
     ) {
+
       const generatedTitle =
         cleanMessage.length > 40
           ? `${cleanMessage.substring(0, 40)}...`
@@ -801,14 +1013,17 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
         req.user.id
       );
 
-      updatedTitle = generatedTitle;
+      updatedTitle =
+        generatedTitle;
     }
 
-    // ----------------------------------------------------------
-    // 7. Send response to frontend
-    // ----------------------------------------------------------
+
+    // ========================================================
+    // 8. SEND RESPONSE TO FRONTEND
+    // ========================================================
 
     return res.json({
+
       success: true,
 
       conversationId,
@@ -830,13 +1045,16 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
         conversation_id: conversationId,
         role: 'assistant',
         content: assistantResponseText,
+        sources: webSources,
         created_at:
           assistantMsgResult.created_at ||
           new Date().toISOString()
       }
     });
 
+
   } catch (err) {
+
     console.error(
       'Chat endpoint error:',
       err
@@ -848,6 +1066,8 @@ async function generateWithRetry(genAI, modelName, chatHistory, message) {
         'An error occurred while processing your message.'
     });
   }
+
 });
+
 
 module.exports = router;

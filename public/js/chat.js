@@ -150,7 +150,12 @@ async function selectConversation(id) {
 
     if (res.messages && res.messages.length > 0) {
       res.messages.forEach(msg => {
-        appendMessageToFeed(msg.role, msg.content, msg.created_at);
+        appendMessageToFeed(
+          msg.role,
+          msg.content,
+          msg.created_at,
+          msg.sources || []
+        );
       });
       scrollMessagesToBottom();
     } else {
@@ -237,7 +242,7 @@ async function handleSendMessage(e) {
 /**
  * Append a message bubble to the chat feed
  */
-function appendMessageToFeed(role, content, timestamp) {
+function appendMessageToFeed(role, content, timestamp, sources = []) {
   const feed = document.getElementById('message-feed');
   if (!feed) return;
 
@@ -254,6 +259,16 @@ function appendMessageToFeed(role, content, timestamp) {
     </div>
     <div class="message-content-wrapper">
       <div class="message-bubble">${renderedContent}</div>
+      ${!isUser && sources.length ? `
+        <div class="web-sources">
+          <strong>🌐 Sources</strong>
+          ${sources.map((source, index) => `
+              <a href="${source.url}" target="_blank" rel="noopener noreferrer">
+                  ${index + 1}. ${escapeHtml(source.title || source.url)}
+              </a>
+          `).join('')}
+        </div>
+      ` : ''}
       <div class="message-meta">
         <span>${formattedTime}</span>
         ${!isUser ? `<button class="icon-btn-ghost" style="width:20px;height:20px;font-size:0.7rem;" onclick="copyMessageText(this)" title="Copy message"><i class="fa-regular fa-copy"></i></button>` : ''}
