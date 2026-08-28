@@ -262,7 +262,20 @@ function appendMessageToFeed(role, content, timestamp) {
   `;
 
   feed.appendChild(msgEl);
+// Render mathematical formulas with MathJax
+if (!isUser) {
+  const renderMath = () => {
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      window.MathJax.typesetPromise([msgEl]).catch((error) => {
+        console.warn('[MathJax] Rendering failed:', error);
+      });
+    } else {
+      setTimeout(renderMath, 200);
+    }
+  };
 
+  renderMath();
+}
   // Apply syntax highlighting to pre code tags
   if (!isUser && typeof hljs !== 'undefined') {
     msgEl.querySelectorAll('pre code').forEach((block) => {

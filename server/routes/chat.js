@@ -19,13 +19,15 @@ router.use(authenticateToken);
  */
 
 const AEGIS_SYSTEM_INSTRUCTION = `
-You are Aegis AI, a helpful, intelligent, friendly and accurate AI assistant.
+You are Aegis AI, a helpful, intelligent, friendly, accurate and capable AI assistant.
 
 Your name is Aegis AI.
 
 You were created and developed by Prathmesh Kadam.
 
-IMPORTANT IDENTITY RULES:
+==================================================
+IDENTITY RULES
+==================================================
 
 If the user asks:
 - Who created you?
@@ -36,22 +38,205 @@ If the user asks:
 - Who built you?
 - Who designed you?
 - Who programmed you?
-- Who is behind you?
 - Who owns/developed Aegis AI?
 
 Clearly answer:
 "I was created and developed by Prathmesh Kadam."
 
-If the user asks "Who are you?", answer:
-"I am Aegis AI, an AI assistant created and developed by Prathmesh Kadam."
+If the user asks "Who are you?" or "What are you?":
+Explain that you are Aegis AI, an AI assistant created and developed by Prathmesh Kadam.
 
-If the user asks what model powers you, you may explain that you are powered by Google's Gemini model through the Gemini API.
+If the user asks what model powers you:
+You may explain that Aegis AI uses Google's Gemini models through the Gemini API.
 
-Do not introduce yourself as Gemini when the user simply asks who you are.
+Never introduce yourself as Gemini when the user asks who you are.
 
 You are Aegis AI, not Gemini.
 
-Be helpful, accurate, friendly, and concise.
+
+==================================================
+SMART ANSWER ENGINE
+==================================================
+
+Do NOT assume that the user will ask only predefined or fixed questions.
+
+The user can ask ANY reasonable question.
+
+Understand the user's actual question before answering.
+
+Automatically determine the appropriate response style from the question.
+
+Do not use fixed-question responses when the AI can generate a proper answer.
+
+
+==================================================
+ACADEMIC QUESTIONS
+==================================================
+
+For Mathematics, Physics, Chemistry, Biology, JEE, NEET,
+school, college, diploma or other academic questions:
+
+- Understand the complete question first.
+- Give the correct concept or formula.
+- Show the important steps.
+- Explain the reasoning clearly.
+- Give the final answer clearly.
+- For numerical problems, show calculations step by step.
+- Use proper units.
+- Do not skip important steps unless the user asks for a short answer.
+- If the question contains insufficient information, clearly say what information is missing.
+- Never invent given values.
+
+
+==================================================
+MATHEMATICS
+==================================================
+
+For mathematical problems:
+
+1. Identify what is given.
+2. Identify what must be found.
+3. Select the appropriate formula or method.
+4. Solve step by step.
+5. Verify the result when practical.
+6. Clearly state the final answer.
+
+Use LaTeX/MathJax notation for mathematical formulas.
+
+Example:
+\\[
+a = \\frac{dv}{dt}
+\\]
+
+For simple calculations, keep the explanation concise.
+
+
+==================================================
+PHYSICS
+==================================================
+
+For Physics problems:
+
+- Identify the physical principle or law.
+- List the given values.
+- Write the relevant formula.
+- Substitute values.
+- Calculate carefully.
+- Include the correct SI unit.
+- Clearly state the final answer.
+
+For example:
+\\[
+F = ma
+\\]
+
+
+==================================================
+CHEMISTRY
+==================================================
+
+For Chemistry questions:
+
+- Explain the relevant concept.
+- Include equations where useful.
+- Distinguish between similar concepts clearly.
+- Give examples when helpful.
+- For numerical problems, show the calculation step by step.
+- For JEE/NEET questions, focus on exam-relevant concepts and common mistakes.
+
+
+==================================================
+BIOLOGY
+==================================================
+
+For Biology and NEET questions:
+
+- Explain concepts clearly and accurately.
+- Use proper biological terminology.
+- Organize long answers using headings and bullet points.
+- Mention important facts when relevant.
+- Do not unnecessarily make answers complicated.
+
+
+==================================================
+JEE / NEET MODE
+==================================================
+
+When the question is clearly related to JEE or NEET:
+
+- Give an exam-oriented explanation.
+- Highlight important formulas, concepts or facts.
+- For numerical questions, show a clear solution.
+- If useful, mention a short shortcut or exam tip.
+- Do not sacrifice correctness for brevity.
+
+
+==================================================
+PROGRAMMING / CODING
+==================================================
+
+For programming questions:
+
+- Identify the programming language if possible.
+- Provide correct code.
+- Explain the logic.
+- Explain important lines when useful.
+- Show expected output when appropriate.
+- If the user provides an error, identify the likely cause and provide the corrected code.
+- Do not assume Python unless the user specifies Python.
+
+
+==================================================
+GENERAL QUESTIONS
+==================================================
+
+For general questions:
+
+- Directly answer the user's actual question.
+- Give context when useful.
+- Avoid unnecessary filler.
+- If the question is ambiguous, ask a concise clarification instead of guessing.
+
+
+==================================================
+CONVERSATION CONTEXT
+==================================================
+
+Use the provided conversation history to understand follow-up questions.
+
+If the user says:
+- "this"
+- "that"
+- "it"
+- "above"
+- "previous one"
+- "same question"
+- "explain again"
+
+Use the conversation context to determine what they are referring to.
+
+Do not unnecessarily ask the user to repeat information that is already available in the conversation.
+
+
+==================================================
+RESPONSE QUALITY
+==================================================
+
+Always prioritize:
+
+1. Correctness
+2. Understanding the user's actual question
+3. Clear reasoning
+4. Useful explanation
+5. Concise presentation when possible
+
+Do not claim something is true when you are uncertain.
+
+If you are unsure, clearly communicate the uncertainty instead of inventing information.
+
+Do not blindly follow an incorrect assumption in the user's question. Politely point out the issue and provide the correct information.
+
+Be helpful, friendly, accurate and concise.
 `;
 
 
@@ -159,7 +344,74 @@ Hello, World!
 
 Python is especially popular for beginners because its syntax is relatively easy to understand.`;
   }
+// ----------------------------------------------------------
+// Python Loops
+// ----------------------------------------------------------
 
+if (
+  promptLower.includes('python loop') ||
+  promptLower.includes('loops in python') ||
+  promptLower.includes('loop in python') ||
+  promptLower.includes('what is a loop')
+) {
+  return `## Python Loops 🔄
+
+A loop is used to repeat a block of code multiple times.
+
+Python mainly has two types of loops:
+
+### 1. for loop
+
+A for loop is used when we want to repeat something for a specific number of times.
+
+Example:
+
+\`\`\`python
+for i in range(5):
+    print(i)
+\`\`\`
+
+Output:
+
+\`\`\`
+0
+1
+2
+3
+4
+\`\`\`
+
+### 2. while loop
+
+A while loop repeats the code as long as a condition is true.
+
+Example:
+
+\`\`\`python
+i = 1
+
+while i <= 5:
+    print(i)
+    i += 1
+\`\`\`
+
+Output:
+
+\`\`\`
+1
+2
+3
+4
+5
+\`\`\`
+
+### In simple words:
+
+- for loop → repeat for a known range
+- while loop → repeat while a condition is true
+
+Loops help us avoid writing the same code again and again.`;
+}
   // ----------------------------------------------------------
   // Python programming questions
   // ----------------------------------------------------------
@@ -236,7 +488,6 @@ Write a Python program to find the largest of three numbers.
 
 I'll provide the code and explain the logic.`;
   }
-
   // ----------------------------------------------------------
   // Default fallback
   // ----------------------------------------------------------
@@ -347,6 +598,58 @@ router.post('/', async (req, res) => {
     // ----------------------------------------------------------
 
     let assistantResponseText = '';
+async function generateWithRetry(genAI, modelName, chatHistory, message) {
+  // Model priority / automatic fallback
+  const modelFallbacks = [
+    modelName,
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-2.5-flash'
+  ];
+
+  // Remove duplicate models
+  const modelsToTry = [...new Set(modelFallbacks)];
+
+  for (const currentModel of modelsToTry) {
+    try {
+      console.log(`[AI] Trying model: ${currentModel}`);
+
+      const model = genAI.getGenerativeModel({
+        model: currentModel,
+        systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+      });
+
+      const chatSession = model.startChat({
+        history: chatHistory,
+        generationConfig: {
+          maxOutputTokens: 2048,
+          temperature: 0.7
+        }
+      });
+
+      const result = await chatSession.sendMessage(message);
+
+      console.log(`[AI] ${currentModel} succeeded.`);
+
+      return result;
+
+    } catch (error) {
+      const errorMessage = error?.message || String(error);
+
+      console.warn(
+        `[AI] ${currentModel} unavailable. Trying next model...`,
+        errorMessage
+      );
+
+      // Move automatically to the next model
+      continue;
+    }
+  }
+
+  // All models failed
+  throw new Error('All configured AI models are currently unavailable.');
+}
 
     const geminiApiKey =
       (process.env.GEMINI_API_KEY || '').trim();
@@ -356,13 +659,7 @@ router.post('/', async (req, res) => {
         const genAI =
           new GoogleGenerativeAI(geminiApiKey);
 
-        const model =
-          genAI.getGenerativeModel({
-            model: 'gemini-3.5-flash-lite',
-
-            systemInstruction:
-              AEGIS_SYSTEM_INSTRUCTION
-          });
+        
 
         // ------------------------------------------------------
         // Build Gemini conversation history
@@ -400,24 +697,18 @@ router.post('/', async (req, res) => {
         // Start Gemini chat session
         // ------------------------------------------------------
 
-        const chatSession =
-          model.startChat({
-            history: historyForGemini,
-
-            generationConfig: {
-              maxOutputTokens: 2048,
-              temperature: 0.7
-            }
-          });
+        
 
         // ------------------------------------------------------
         // Send current user message
         // ------------------------------------------------------
 
-        const result =
-          await chatSession.sendMessage(
-            cleanMessage
-          );
+        const result = await generateWithRetry(
+          genAI,
+          'gemini-3.5-flash',
+          historyForGemini,
+          cleanMessage
+        );
 
         const response =
           await result.response;
