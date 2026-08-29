@@ -10,12 +10,17 @@ const {
 const { authenticateToken } = require('../middleware/auth');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleGenAI } = require('@google/genai');
+const OpenAI = require('openai');
 const { tavily } = require('@tavily/core');
 const tavilyClient = tavily({
     apiKey: process.env.TAVILY_API_KEY
 });
 const webAI = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
+});
+const nvidiaAI = new OpenAI({
+    apiKey: process.env.NVIDIA_API_KEY,
+    baseURL: 'https://integrate.api.nvidia.com/v1'
 });
 
 async function testWebSearch(query) {
@@ -563,18 +568,96 @@ async function generateWithRetry(
   chatHistory,
   message
 ) {
-  const modelFallbacks = [
-    modelName,
+  // ============================================================
+  // AEGIS AI MODEL FALLBACK CHAIN
+  // 1. NVIDIA Nemotron 3 Ultra
+  // 2. Gemini 3.5 Flash
+  // 3. Gemini 3.6 Flash
+  // 4. Gemini 2.5 Flash
+  // ============================================================
+
+  const modelsToTry = [
+    'nemotron-3-ultra-550b-a55b',
     'gemini-3.5-flash-lite',
     'gemini-3.6-flash',
     'gemini-2.5-flash'
   ];
 
-  const modelsToTry = [...new Set(modelFallbacks)];
-
   for (const currentModel of modelsToTry) {
     try {
       console.log(`[AI] Trying model: ${currentModel}`);
+
+      // ==========================================================
+      // NVIDIA NEMOTRON
+      // ==========================================================
+
+      if (currentModel === 'nemotron-3-ultra-550b-a55b') {
+
+        if (!process.env.NVIDIA_API_KEY) {
+          throw new Error('NVIDIA_API_KEY is not configured.');
+        }
+
+        const messages = [
+          {
+            role: 'system',
+            content: AEGIS_SYSTEM_INSTRUCTION
+          }
+        ];
+
+        // Convert Gemini-style history to OpenAI/NVIDIA format
+        if (Array.isArray(chatHistory)) {
+          for (const item of chatHistory) {
+
+            const text = item?.parts
+              ?.map(part => part?.text || '')
+              .join('')
+              .trim();
+
+            if (!text) continue;
+
+            messages.push({
+              role: item.role === 'model'
+                ? 'assistant'
+                : 'user',
+              content: text
+            });
+          }
+        }
+
+        // Current user message
+        messages.push({
+          role: 'user',
+          content: message
+        });
+
+        const completion = await nvidiaAI.chat.completions.create({
+          model: 'nvidia/nemotron-3-ultra-550b-a55b',
+          messages,
+          temperature: 0.7,
+          max_tokens: 2048
+        });
+
+        const text =
+          completion?.choices?.[0]?.message?.content?.trim();
+
+        if (!text) {
+          throw new Error('Nemotron returned an empty response.');
+        }
+
+        console.log('[AI] Nemotron 3 Ultra succeeded.');
+
+        // Return Gemini-compatible structure
+        // so the existing code below does NOT need to change.
+        return {
+          response: {
+            text: () => text
+          }
+        };
+      }
+
+      // ==========================================================
+      // GEMINI FALLBACK
+      // ==========================================================
 
       const model = genAI.getGenerativeModel({
         model: currentModel,
@@ -589,22 +672,27 @@ async function generateWithRetry(
         }
       });
 
-      const result =
-        await chatSession.sendMessage(message);
+      const result = await chatSession.sendMessage(message);
 
-      console.log(
-        `[AI] ${currentModel} succeeded.`
-      );
+      console.log(`[AI] ${currentModel} succeeded.`);
 
       return result;
 
     } catch (error) {
+
       console.warn(
         `[AI] ${currentModel} failed:`,
         error?.message || error
       );
+
+      // Automatically continue to next model
+      continue;
     }
   }
+
+  // ============================================================
+  // ALL MODELS FAILED
+  // ============================================================
 
   throw new Error(
     'All configured AI models are currently unavailable.'
