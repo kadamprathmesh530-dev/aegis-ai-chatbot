@@ -338,45 +338,8 @@
         <div class="messages-container" id="messages-container">
           <!-- Welcome Empty State -->
           <div class="empty-state" id="empty-state">
-            <div class="empty-icon">
-              <i class="fa-solid fa-wand-magic-sparkles"></i>
-            </div>
-            <h3>What can I help you build or explore today?</h3>
-            <p>Your chats are securely encrypted and privately stored in your dedicated database partition.</p>
-            
-            <div class="prompt-suggestions">
-              <button class="suggestion-card" id="suggest-security">
-                <i class="fa-solid fa-lock"></i>
-                <div class="suggestion-text">
-                  <strong>Security Best Practices</strong>
-                  <span>Explain bcrypt hashing and JWT tokens</span>
-                </div>
-              </button>
-
-              <button class="suggestion-card" id="suggest-code">
-                <i class="fa-solid fa-code"></i>
-                <div class="suggestion-text">
-                  <strong>Code Generation</strong>
-                  <span>Write an async JavaScript fetch wrapper</span>
-                </div>
-              </button>
-
-              <button class="suggestion-card" id="suggest-database">
-                <i class="fa-solid fa-database"></i>
-                <div class="suggestion-text">
-                  <strong>Database Architecture</strong>
-                  <span>Explain SQLite WAL mode and indexes</span>
-                </div>
-              </button>
-
-              <button class="suggestion-card" id="suggest-brainstorm">
-                <i class="fa-solid fa-lightbulb"></i>
-                <div class="suggestion-text">
-                  <strong>Brainstorming</strong>
-                  <span>Design features for intelligent assistants</span>
-                </div>
-              </button>
-            </div>
+            <h3 id="welcome-title">Hello</h3>
+            <p id="welcome-subtitle">How can I help you?</p>
           </div>
 
           <!-- Message Feed List -->
@@ -621,5 +584,41 @@
   <script src="js/chat.js"></script>
   <script src="js/admin.js"></script>
   <script src="js/app.js"></script>
+
+  <!-- Sync welcome greeting with the logged-in user's username -->
+  <script>
+    (function () {
+      function updateWelcomeGreeting() {
+        const welcomeTitle = document.getElementById('welcome-title');
+        if (!welcomeTitle) return;
+
+        let user = null;
+
+        try {
+          if (typeof API !== 'undefined' && typeof API.getUser === 'function') {
+            user = API.getUser();
+          }
+        } catch (error) {
+          console.warn('Unable to read logged-in user:', error);
+        }
+
+        const username =
+          user && typeof user.username === 'string' && user.username.trim()
+            ? user.username.trim()
+            : '';
+
+        if (username) {
+          welcomeTitle.textContent = `Hello, ${username}`;
+        }
+      }
+
+      document.addEventListener('DOMContentLoaded', updateWelcomeGreeting);
+
+      // Give the existing session-check logic time to restore the user.
+      setTimeout(updateWelcomeGreeting, 300);
+      setTimeout(updateWelcomeGreeting, 1000);
+    })();
+  </script>
+
 </body>
 </html>

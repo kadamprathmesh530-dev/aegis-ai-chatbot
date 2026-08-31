@@ -32,37 +32,39 @@ function switchAuthTab(tab) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    const registerBtn = document.getElementById('tab-register-btn');
-    const loginBtn = document.getElementById('tab-login-btn');
+  const registerBtn = document.getElementById('tab-register-btn');
+  const loginBtn = document.getElementById('tab-login-btn');
 
-    if (registerBtn) {
-        registerBtn.addEventListener('click', () => {
-            switchAuthTab('register');
-        });
-    }
+  if (registerBtn) {
+    registerBtn.addEventListener('click', () => {
+      switchAuthTab('register');
+    });
+  }
 
-    if (loginBtn) {
-        loginBtn.addEventListener('click', () => {
-            switchAuthTab('login');
-        });
-    }
-    const loginForm = document.getElementById('login-form');
-    const registerForm = document.getElementById('register-form');
+  if (loginBtn) {
+    loginBtn.addEventListener('click', () => {
+      switchAuthTab('login');
+    });
+  }
 
-    if (loginForm) {
+  const loginForm = document.getElementById('login-form');
+  const registerForm = document.getElementById('register-form');
+
+  if (loginForm) {
     loginForm.addEventListener('submit', handleLogin);
-    }
+  }
 
-    if (registerForm) {
-      registerForm.addEventListener('submit', handleRegister);
-    }
+  if (registerForm) {
+    registerForm.addEventListener('submit', handleRegister);
+  }
 });
 
 function togglePasswordVisibility(inputId) {
   const input = document.getElementById(inputId);
   if (!input) return;
+
   const icon = input.parentElement.querySelector('.toggle-password i');
-  
+
   if (input.type === 'password') {
     input.type = 'text';
     if (icon) icon.className = 'fa-regular fa-eye-slash';
@@ -75,6 +77,7 @@ function togglePasswordVisibility(inputId) {
 function checkPasswordStrength(password) {
   const bar = document.getElementById('strength-bar');
   const text = document.getElementById('strength-text');
+
   if (!bar || !text) return;
 
   if (!password) {
@@ -85,6 +88,7 @@ function checkPasswordStrength(password) {
   }
 
   let score = 0;
+
   if (password.length >= 6) score += 25;
   if (password.length >= 10) score += 25;
   if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score += 25;
@@ -107,76 +111,102 @@ function checkPasswordStrength(password) {
   }
 }
 
-
-
 async function handleLogin(e) {
   e.preventDefault();
+
   const identifier = document.getElementById('login-identifier').value.trim();
   const password = document.getElementById('login-password').value;
   const errorBox = document.getElementById('login-error');
   const submitBtn = document.getElementById('login-submit-btn');
 
   if (!identifier || !password) {
-    showFormError(errorBox, 'Please enter both your email/username and password.');
+    showFormError(
+      errorBox,
+      'Please enter both your email/username and password.'
+    );
     return;
   }
 
   submitBtn.disabled = true;
-  submitBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Signing In...';
+  submitBtn.innerHTML =
+    '<i class="fa-solid fa-circle-notch fa-spin"></i> Signing In...';
+
   hideFormError(errorBox);
 
   try {
     const res = await API.login(identifier, password);
+
     API.setToken(res.token);
     API.setUser(res.user);
+
     currentUser = res.user;
 
     showToast(`Welcome back, ${currentUser.username}!`, 'success');
+
     transitionToApp();
   } catch (err) {
     showFormError(errorBox, err.message);
   } finally {
     submitBtn.disabled = false;
-    submitBtn.innerHTML = '<span>Sign In</span> <i class="fa-solid fa-arrow-right"></i>';
+    submitBtn.innerHTML =
+      '<span>Sign In</span> <i class="fa-solid fa-arrow-right"></i>';
   }
 }
 
 async function handleRegister(e) {
   e.preventDefault();
+
   const username = document.getElementById('reg-username').value.trim();
   const email = document.getElementById('reg-email').value.trim();
   const password = document.getElementById('reg-password').value;
-  const confirmPassword = document.getElementById('reg-confirm-password').value;
+  const confirmPassword =
+    document.getElementById('reg-confirm-password').value;
+
   const errorBox = document.getElementById('register-error');
   const submitBtn = document.getElementById('register-submit-btn');
 
   if (password !== confirmPassword) {
-    showFormError(errorBox, 'Passwords do not match. Please verify and retype.');
+    showFormError(
+      errorBox,
+      'Passwords do not match. Please verify and retype.'
+    );
     return;
   }
 
   if (password.length < 6) {
-    showFormError(errorBox, 'Password must be at least 6 characters long.');
+    showFormError(
+      errorBox,
+      'Password must be at least 6 characters long.'
+    );
     return;
   }
 
   submitBtn.disabled = true;
-  submitBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Creating Account...';
+  submitBtn.innerHTML =
+    '<i class="fa-solid fa-circle-notch fa-spin"></i> Creating Account...';
+
   hideFormError(errorBox);
 
   try {
     const res = await API.register(username, email, password);
+
     API.setToken(res.token);
     API.setUser(res.user);
+
     currentUser = res.user;
 
-    showToast(`Account created successfully! Welcome, ${currentUser.username}.`, 'success');
+    showToast(
+      `Account created successfully! Welcome, ${currentUser.username}.`,
+      'success'
+    );
+
     transitionToApp();
   } catch (err) {
     showFormError(errorBox, err.message);
   } finally {
     submitBtn.disabled = false;
-    submitBtn.innerHTML = '<span>Create Secure Account</span> <i class="fa-solid fa-shield-halved"></i>';
+    submitBtn.innerHTML =
+      '<span>Create Secure Account</span> <i class="fa-solid fa-shield-halved"></i>';
   }
 }
 
@@ -187,20 +217,25 @@ async function handleLogout() {
     console.warn('Logout notice:', e);
   } finally {
     currentUser = null;
+
     API.clearSession();
+
     showToast('You have been signed out.', 'info');
+
     showAuthScreen();
   }
 }
 
 function showFormError(el, msg) {
   if (!el) return;
+
   el.textContent = msg;
   el.classList.add('active');
 }
 
 function hideFormError(el) {
   if (!el) return;
+
   el.textContent = '';
   el.classList.remove('active');
 }
@@ -213,25 +248,60 @@ function showAuthScreen() {
 function transitionToApp() {
   document.getElementById('auth-view').classList.remove('active');
   document.getElementById('app-view').classList.add('active');
-  
+
   updateUserInterface();
   loadConversationsList();
 }
 
+/**
+ * Updates all UI elements that depend on the logged-in user.
+ */
 function updateUserInterface() {
+  // Use currentUser first.
+  // If it is not available yet, use the saved session user.
+  if (!currentUser && typeof API !== 'undefined' && API.getUser) {
+    currentUser = API.getUser();
+  }
+
   if (!currentUser) return;
+
+  const username = currentUser.username || 'User';
 
   const usernameEl = document.getElementById('sidebar-username');
   const userRoleEl = document.getElementById('sidebar-user-role');
   const avatarInitialsEl = document.getElementById('sidebar-user-initials');
+  const welcomeTitle = document.getElementById('welcome-title');
+
   const adminBtns = document.querySelectorAll('.admin-only-btn');
 
-  if (usernameEl) usernameEl.textContent = currentUser.username;
-  if (userRoleEl) userRoleEl.textContent = currentUser.role === 'admin' ? '🛡️ Administrator' : '👤 User';
-  if (avatarInitialsEl) avatarInitialsEl.textContent = (currentUser.username || 'U').substring(0, 2).toUpperCase();
+  // Sidebar username
+  if (usernameEl) {
+    usernameEl.textContent = username;
+  }
 
-  // Show or hide admin buttons based on role
+  // Sidebar role
+  if (userRoleEl) {
+    userRoleEl.textContent =
+      currentUser.role === 'admin'
+        ? '🛡️ Administrator'
+        : '👤 User';
+  }
+
+  // Avatar initials
+  if (avatarInitialsEl) {
+    avatarInitialsEl.textContent = username
+      .substring(0, 2)
+      .toUpperCase();
+  }
+
+  // Main welcome heading
+  if (welcomeTitle) {
+    welcomeTitle.textContent = `Hello, ${username}`;
+  }
+
+  // Admin buttons
   const isAdmin = currentUser.role === 'admin';
+
   adminBtns.forEach(btn => {
     btn.style.display = isAdmin ? 'inline-flex' : 'none';
   });
@@ -240,26 +310,42 @@ function updateUserInterface() {
 function openProfileModal() {
   if (!currentUser) return;
 
-  document.getElementById('prof-username').textContent = currentUser.username;
-  document.getElementById('prof-email').textContent = currentUser.email;
-  
+  document.getElementById('prof-username').textContent =
+    currentUser.username;
+
+  document.getElementById('prof-email').textContent =
+    currentUser.email;
+
   const roleEl = document.getElementById('prof-role');
+
   roleEl.textContent = currentUser.role.toUpperCase();
   roleEl.className = `role-badge ${currentUser.role}`;
 
-  document.getElementById('prof-created').textContent = currentUser.createdAt 
-    ? new Date(currentUser.createdAt).toLocaleDateString()
-    : 'Active Session';
+  document.getElementById('prof-created').textContent =
+    currentUser.createdAt
+      ? new Date(currentUser.createdAt).toLocaleDateString()
+      : 'Active Session';
 
   const modal = document.getElementById('profile-modal');
-  if (modal) modal.style.display = 'flex';
+
+  if (modal) {
+    modal.style.display = 'flex';
+  }
 }
 
 function closeProfileModal() {
   const modal = document.getElementById('profile-modal');
-  if (modal) modal.style.display = 'none';
+
+  if (modal) {
+    modal.style.display = 'none';
+  }
+
   const cpError = document.getElementById('cp-error');
-  if (cpError) hideFormError(cpError);
+
+  if (cpError) {
+    hideFormError(cpError);
+  }
+
   document.getElementById('change-password-form')?.reset();
 }
 
@@ -271,10 +357,18 @@ function closeProfileModalOnBackdrop(e) {
 
 async function handleChangePassword(e) {
   e.preventDefault();
-  const currentPassword = document.getElementById('cp-current').value;
-  const newPassword = document.getElementById('cp-new').value;
-  const confirmPassword = document.getElementById('cp-confirm').value;
-  const errorBox = document.getElementById('cp-error');
+
+  const currentPassword =
+    document.getElementById('cp-current').value;
+
+  const newPassword =
+    document.getElementById('cp-new').value;
+
+  const confirmPassword =
+    document.getElementById('cp-confirm').value;
+
+  const errorBox =
+    document.getElementById('cp-error');
 
   if (newPassword !== confirmPassword) {
     showFormError(errorBox, 'New passwords do not match.');
@@ -282,11 +376,18 @@ async function handleChangePassword(e) {
   }
 
   try {
-    await API.changePassword(currentPassword, newPassword);
-    showToast('Password updated successfully!', 'success');
+    await API.changePassword(
+      currentPassword,
+      newPassword
+    );
+
+    showToast(
+      'Password updated successfully!',
+      'success'
+    );
+
     closeProfileModal();
   } catch (err) {
     showFormError(errorBox, err.message);
   }
 }
-
