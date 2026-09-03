@@ -585,40 +585,5 @@
   <script src="js/admin.js"></script>
   <script src="js/app.js"></script>
 
-  <!-- Sync welcome greeting with the logged-in user's username -->
-  <script>
-    (function () {
-      function updateWelcomeGreeting() {
-        const welcomeTitle = document.getElementById('welcome-title');
-        if (!welcomeTitle) return;
-
-        let user = null;
-
-        try {
-          if (typeof API !== 'undefined' && typeof API.getUser === 'function') {
-            user = API.getUser();
-          }
-        } catch (error) {
-          console.warn('Unable to read logged-in user:', error);
-        }
-
-        const username =
-          user && typeof user.username === 'string' && user.username.trim()
-            ? user.username.trim()
-            : '';
-
-        if (username) {
-          welcomeTitle.textContent = `Hello, ${username}`;
-        }
-      }
-
-      document.addEventListener('DOMContentLoaded', updateWelcomeGreeting);
-
-      // Give the existing session-check logic time to restore the user.
-      setTimeout(updateWelcomeGreeting, 300);
-      setTimeout(updateWelcomeGreeting, 1000);
-    })();
-  </script>
-
 </body>
 </html>

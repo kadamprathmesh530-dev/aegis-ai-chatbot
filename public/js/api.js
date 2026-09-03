@@ -151,6 +151,88 @@ const API = {
     });
   },
 
+  // Streaming chat endpoint
+  async sendMessageStream(conversationId, message, onChunk) {
+    const url = `/api/chat/stream`;
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+
+    const token = this.getToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ conversationId, message })
+      });
+
+      if (response.status === 401) {
+        this.clearSession();
+        if (typeof showAuthScreen === 'function') {
+          showAuthScreen();
+        }
+        throw new Error('Session expired. Please log in again.');
+      }
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `Request failed with status ${response.status}`);
+      }
+
+      // Process SSE stream
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Split by double newline (SSE event delimiter)
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || ''; // Keep incomplete event in buffer
+
+        for (const event of events) {
+          if (event.trim() === '') continue;
+          
+          // Each event may have multiple lines, find the data: line
+          const lines = event.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (onChunk) onChunk(data);
+              } catch (e) {
+                console.warn('Failed to parse SSE data:', line);
+              }
+              break; // Only process first data: line per event
+            }
+          }
+        }
+      }
+
+      // Process any remaining buffer
+      if (buffer.trim() && buffer.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(buffer.slice(6));
+          if (onChunk) onChunk(data);
+        } catch (e) {
+          console.warn('Failed to parse final SSE data:', buffer);
+        }
+      }
+
+      return { success: true };
+    } catch (err) {
+      throw err;
+    }
+  },
+
   // Admin endpoints
   async getAdminStats() {
     return this.request('/admin/stats');

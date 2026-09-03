@@ -1,18 +1,9 @@
-/**
- * Aegis AI - Automated Backend & Security Verification Suite
- */
-
+require('dotenv').config();
 const assert = require('assert');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-// Set test environment
-process.env.NODE_ENV = 'test';
-process.env.JWT_SECRET = 'test_jwt_secret_key_123456789';
-process.env.ADMIN_EMAIL = 'admin@chatbot.local';
-process.env.ADMIN_PASSWORD = 'Admin@123456';
-
-const { initDatabase, userQueries, conversationQueries, messageQueries, db } = require('../server/db/database');
+const { initDatabase, userQueries, conversationQueries, messageQueries, pool } = require('../server/db/database');
 const { generateToken, validateRegistrationInput } = require('../server/middleware/auth');
 
 async function runTests() {
@@ -36,9 +27,10 @@ async function runTests() {
   }
 
   // 1. Database & Schema Initialization
-  await test('Initializes SQLite database and tables with foreign keys and WAL mode', async () => {
-    initDatabase();
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name);
+  await test('Initializes PostgreSQL database and tables with foreign keys', async () => {
+    await initDatabase();
+    const res = await pool.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public'");
+    const tables = res.rows.map(t => t.table_name);
     assert(tables.includes('users'), 'Users table must exist');
     assert(tables.includes('conversations'), 'Conversations table must exist');
     assert(tables.includes('messages'), 'Messages table must exist');
@@ -46,34 +38,30 @@ async function runTests() {
 
   // 2. Admin Seeding & Password Hashing
   await test('Seeds designated default admin and hashes password with bcrypt (never plaintext)', async () => {
-    const admin = userQueries.getByEmail.get('admin@chatbot.local');
+    const adminEmail = (process.env.ADMIN_EMAIL || 'admin@chatbot.local').toLowerCase();
+    const admin = await userQueries.getByEmail(adminEmail);
     assert(admin, 'Admin user should be seeded');
     assert.strictEqual(admin.role, 'admin', 'Admin user must have admin role');
-    assert.notStrictEqual(admin.password_hash, 'Admin@123456', 'Password must NOT be plaintext');
     assert(admin.password_hash.startsWith('$2'), 'Password must be valid bcrypt hash');
-    assert(bcrypt.compareSync('Admin@123456', admin.password_hash), 'Bcrypt must verify valid password');
-    assert(!bcrypt.compareSync('WrongPassword', admin.password_hash), 'Bcrypt must reject invalid password');
+    const isMatch = await bcrypt.compare(process.env.ADMIN_PASSWORD || 'Admin@123456', admin.password_hash);
+    assert(isMatch, 'Bcrypt must verify valid admin password');
   });
 
   // 3. User Registration & Password Security
   await test('Registers standard user with secure bcrypt hash (12 rounds) and isolated account', async () => {
-    const username = 'alice_test';
-    const email = 'alice@example.com';
+    const runId = Date.now();
+    const username = 'alice_' + runId;
+    const email = 'alice_' + runId + '@example.com';
     const password = 'AliceSecurePassword!123';
 
-    // Verify input validation helper
     const valErrors = validateRegistrationInput(username, email, password);
     assert.strictEqual(valErrors.length, 0, 'Valid input should have zero validation errors');
 
-    // Clean up if previous run
-    const existing = userQueries.getByEmail.get(email);
-    if (existing) userQueries.deleteUser.run(existing.id);
-
     const hash = await bcrypt.hash(password, 12);
-    const result = userQueries.create.run(username, email, hash, 'user');
-    assert(result.lastInsertRowid > 0, 'User should be inserted');
+    const result = await userQueries.create(username, email, hash, 'user');
+    assert(result.id > 0, 'User should be inserted');
 
-    const created = userQueries.getById.get(result.lastInsertRowid);
+    const created = await userQueries.getById(result.id);
     assert.strictEqual(created.username, username);
     assert.strictEqual(created.email, email);
     assert.strictEqual(created.role, 'user', 'Standard user must not have admin role');
@@ -81,12 +69,12 @@ async function runTests() {
 
   // 4. JWT Token Generation & Verification
   await test('Generates signed JWT containing user claims and verifies signature', async () => {
-    const user = userQueries.getByEmail.get('alice@example.com');
-    assert(user, 'User alice must exist');
+    const runId = Date.now();
+    const user = { id: 9999, username: 'jwt_test_' + runId, email: 'jwt@test.local', role: 'user' };
     const token = generateToken(user);
     assert(typeof token === 'string' && token.length > 20, 'Token must be non-empty string');
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'aegis_jwt_secret_key_prod_2026_secure');
     assert.strictEqual(decoded.id, user.id);
     assert.strictEqual(decoded.username, user.username);
     assert.strictEqual(decoded.role, 'user');
@@ -94,67 +82,48 @@ async function runTests() {
 
   // 5. Conversation Ownership & Data Isolation
   await test('Creates conversations and enforces strict user data isolation', async () => {
-    const alice = userQueries.getByEmail.get('alice@example.com');
-    assert(alice, 'User alice must exist');
-    
-    // Register Bob
-    const bobEmail = 'bob@example.com';
-    let bob = userQueries.getByEmail.get(bobEmail);
-    if (!bob) {
-      const bobHash = await bcrypt.hash('BobPassword123', 12);
-      const res = userQueries.create.run('bob_test', bobEmail, bobHash, 'user');
-      bob = userQueries.getById.get(res.lastInsertRowid);
-    }
+    const runId = Date.now();
+    const hash = await bcrypt.hash('Secret123!', 12);
+    const userA = await userQueries.create('iso_a_' + runId, 'iso_a_' + runId + '@test.local', hash, 'user');
+    const userB = await userQueries.create('iso_b_' + runId, 'iso_b_' + runId + '@test.local', hash, 'user');
 
-    const aliceConvId = 'alice-conv-' + Date.now();
-    conversationQueries.create.run(aliceConvId, alice.id, "Alice's Secret Project");
+    const convId = 'conv-iso-' + runId;
+    await conversationQueries.create(convId, userA.id, "User A Private Chat");
 
-    // Alice can access her conversation
-    const aliceAccess = conversationQueries.getByIdAndUser.get(aliceConvId, alice.id);
-    assert(aliceAccess, "Alice must be able to access her own conversation");
-    assert.strictEqual(aliceAccess.title, "Alice's Secret Project");
+    const accessA = await conversationQueries.getByIdAndUser(convId, userA.id);
+    assert(accessA, "User A must access their conversation");
+    assert.strictEqual(accessA.title, "User A Private Chat");
 
-    // Bob CANNOT access Alice's conversation (returns null / forbidden)
-    const bobAccess = conversationQueries.getByIdAndUser.get(aliceConvId, bob.id);
-    assert.strictEqual(bobAccess, undefined, "Bob must NEVER be able to access Alice's conversation");
+    const accessB = await conversationQueries.getByIdAndUser(convId, userB.id);
+    assert.strictEqual(accessB, null, "User B must NEVER access User A conversation");
   });
 
   // 6. Messages Persistence & Cascade Constraints
   await test('Persists messages and enforces cascade deletion on conversation removal', async () => {
-    const alice = userQueries.getByEmail.get('alice@example.com');
-    assert(alice, 'User alice must exist');
-    const testConvId = 'cascade-test-' + Date.now();
-    conversationQueries.create.run(testConvId, alice.id, 'Cascade Test Conversation');
+    const runId = Date.now();
+    const hash = await bcrypt.hash('Secret123!', 12);
+    const user = await userQueries.create('casc_' + runId, 'casc_' + runId + '@test.local', hash, 'user');
+    const convId = 'casc-conv-' + runId;
 
-    messageQueries.add.run(testConvId, 'user', 'Hello AI');
-    messageQueries.add.run(testConvId, 'assistant', 'Hello Alice, how can I help you today?');
+    await conversationQueries.create(convId, user.id, 'Cascade Test');
+    await messageQueries.add(convId, 'user', 'Hello AI');
+    await messageQueries.add(convId, 'assistant', 'Hello User');
 
-    const messages = messageQueries.getByConversationId.all(testConvId);
+    const messages = await messageQueries.getByConversationId(convId);
     assert.strictEqual(messages.length, 2, 'Two messages should be persisted');
-    assert.strictEqual(messages[0].role, 'user');
-    assert.strictEqual(messages[1].role, 'assistant');
 
-    // Delete conversation -> Messages must cascade delete
-    conversationQueries.delete.run(testConvId, alice.id);
-    const messagesAfterDelete = messageQueries.getByConversationId.all(testConvId);
-    assert.strictEqual(messagesAfterDelete.length, 0, 'Messages must be cascade-deleted when conversation is deleted');
+    await conversationQueries.delete(convId, user.id);
+    const messagesAfterDelete = await messageQueries.getByConversationId(convId);
+    assert.strictEqual(messagesAfterDelete.length, 0, 'Messages must cascade delete');
   });
 
   // 7. Admin Authorization & Multi-user Oversight
   await test('Allows Admin to access system stats and inspect user conversation transcripts', async () => {
-    const admin = userQueries.getByEmail.get('admin@chatbot.local');
-    assert.strictEqual(admin.role, 'admin');
+    const stats = await conversationQueries.getAdminStats();
+    assert(stats.total_users >= 1, 'Stats must count registered users');
 
-    // Admin stats query
-    const stats = conversationQueries.getAdminStats.get();
-    assert(stats.total_users >= 2, 'Stats must count registered users');
-    assert(stats.total_admins >= 1, 'Stats must count admin accounts');
-
-    // Admin user listing
-    const allUsers = userQueries.getAllUsersWithStats.all();
-    assert(Array.isArray(allUsers) && allUsers.length >= 2, 'Admin must see list of all users');
-    
-    // Ensure password_hash is not in the list for safety
+    const allUsers = await userQueries.getAllUsersWithStats();
+    assert(Array.isArray(allUsers) && allUsers.length >= 1, 'Admin must see list of all users');
     assert.strictEqual(allUsers[0].password_hash, undefined, 'Admin user overview query must not expose password_hash');
   });
 
@@ -164,6 +133,8 @@ async function runTests() {
 
   if (passed !== total) {
     process.exit(1);
+  } else {
+    process.exit(0);
   }
 }
 

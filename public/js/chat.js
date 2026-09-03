@@ -6,6 +6,8 @@
 let activeConversationId = null;
 let userConversations = [];
 let isGenerating = false;
+let currentAssistantMessageEl = null;
+let currentAssistantContent = '';
 
 // Configure Marked.js with syntax highlighting
 if (typeof marked !== 'undefined') {
@@ -171,7 +173,7 @@ async function selectConversation(id) {
 }
 
 /**
- * Handle sending a user message
+ * Handle sending a user message (with streaming support)
  */
 async function handleSendMessage(e) {
   if (e) e.preventDefault();
@@ -203,22 +205,9 @@ async function handleSendMessage(e) {
   scrollMessagesToBottom();
 
   try {
-    const response = await API.sendMessage(activeConversationId, messageText);
+    // Use streaming endpoint
+    await API.sendMessageStream(activeConversationId, messageText, handleStreamChunk);
 
-    // If this was a new conversation, record its ID
-    if (!activeConversationId && response.conversationId) {
-      activeConversationId = response.conversationId;
-    }
-
-    // Update conversation title if provided
-    if (response.updatedTitle) {
-      const titleEl = document.getElementById('active-chat-title');
-      if (titleEl) titleEl.textContent = response.updatedTitle;
-    }
-
-    // Render assistant message
-    appendMessageToFeed('assistant', response.assistantMessage.content, response.assistantMessage.created_at);
-    
     // Refresh conversation sidebar list to show latest title/order
     await loadConversationsList();
     
@@ -228,7 +217,15 @@ async function handleSendMessage(e) {
 
   } catch (err) {
     console.error('Error sending message:', err);
-    appendMessageToFeed('assistant', `⚠️ **Error:** ${err.message || 'Unable to connect to AI server.'}`, new Date().toISOString());
+    // If there's a partial message, show error
+    if (currentAssistantMessageEl) {
+      const bubble = currentAssistantMessageEl.querySelector('.message-bubble');
+      if (bubble) {
+        bubble.innerHTML = `⚠️ **Error:** ${err.message || 'Unable to connect to AI server.'}`;
+      }
+    } else {
+      appendMessageToFeed('assistant', `⚠️ **Error:** ${err.message || 'Unable to connect to AI server.'}`, new Date().toISOString());
+    }
     showToast(err.message, 'error');
   } finally {
     isGenerating = false;
@@ -236,6 +233,119 @@ async function handleSendMessage(e) {
     if (typingIndicator) typingIndicator.style.display = 'none';
     scrollMessagesToBottom();
     input.focus();
+    
+    // Reset streaming state
+    currentAssistantMessageEl = null;
+    currentAssistantContent = '';
+  }
+}
+
+/**
+ * Handle streaming chunks from the server
+ */
+function handleStreamChunk(data) {
+  const feed = document.getElementById('message-feed');
+  if (!feed) return;
+
+  switch (data.type) {
+    case 'user_message':
+      // User message already rendered, just track conversation ID
+      if (!activeConversationId && data.conversation_id) {
+        activeConversationId = data.conversation_id;
+      }
+      break;
+
+    case 'assistant_start':
+      // Create assistant message element
+      currentAssistantMessageEl = document.createElement('div');
+      currentAssistantMessageEl.className = 'chat-message bot-message';
+      currentAssistantContent = '';
+      
+      const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      currentAssistantMessageEl.innerHTML = `
+        <div class="message-avatar">
+          <i class="fa-solid fa-brain"></i>
+        </div>
+        <div class="message-content-wrapper">
+          <div class="message-bubble"></div>
+          <div class="message-meta">
+            <span>${formattedTime}</span>
+            <button class="icon-btn-ghost" style="width:20px;height:20px;font-size:0.7rem;" onclick="copyMessageText(this)" title="Copy message"><i class="fa-regular fa-copy"></i></button>
+          </div>
+        </div>
+      `;
+      
+      feed.appendChild(currentAssistantMessageEl);
+      scrollMessagesToBottom();
+      break;
+
+    case 'assistant_chunk':
+      // Append chunk to current content
+      currentAssistantContent += data.content;
+      if (currentAssistantMessageEl) {
+        const bubble = currentAssistantMessageEl.querySelector('.message-bubble');
+        if (bubble && typeof marked !== 'undefined') {
+          bubble.innerHTML = marked.parse(currentAssistantContent);
+          // Apply syntax highlighting
+          if (typeof hljs !== 'undefined') {
+            bubble.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block);
+            });
+          }
+          // Render math
+          if (window.MathJax && window.MathJax.typesetPromise) {
+            window.MathJax.typesetPromise([currentAssistantMessageEl]).catch(() => {});
+          }
+        }
+      }
+      scrollMessagesToBottom();
+      break;
+
+    case 'assistant_complete':
+      // Update conversation ID if new
+      if (!activeConversationId && data.conversation_id) {
+        activeConversationId = data.conversation_id;
+      }
+      // Update title if provided
+      if (data.updated_title) {
+        const titleEl = document.getElementById('active-chat-title');
+        if (titleEl) titleEl.textContent = data.updated_title;
+      }
+      // Final render with sources if any
+      if (currentAssistantMessageEl && data.sources && data.sources.length > 0) {
+        const wrapper = currentAssistantMessageEl.querySelector('.message-content-wrapper');
+        if (wrapper) {
+          const sourcesHtml = `
+            <div class="web-sources">
+              <strong>🌐 Sources</strong>
+              ${data.sources.map((source, index) => `
+                  <a href="${source.url}" target="_blank" rel="noopener noreferrer">
+                      ${index + 1}. ${escapeHtml(source.title || source.url)}
+                  </a>
+              `).join('')}
+            </div>
+          `;
+          // Insert sources before message-meta
+          const meta = wrapper.querySelector('.message-meta');
+          if (meta) {
+            meta.insertAdjacentHTML('beforebegin', sourcesHtml);
+          }
+        }
+      }
+      break;
+
+    case 'error':
+      console.error('Stream error:', data.error);
+      if (currentAssistantMessageEl) {
+        const bubble = currentAssistantMessageEl.querySelector('.message-bubble');
+        if (bubble) {
+          bubble.innerHTML = `⚠️ **Error:** ${data.error}`;
+        }
+      } else {
+        appendMessageToFeed('assistant', `⚠️ **Error:** ${data.error}`, new Date().toISOString());
+      }
+      break;
   }
 }
 

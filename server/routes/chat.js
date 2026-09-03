@@ -192,6 +192,7 @@ Do not use fixed-question responses when the AI can generate a proper answer.
 
 
 
+
 ==================================================
 ACADEMIC QUESTIONS
 ==================================================
@@ -212,6 +213,7 @@ school, college, diploma or other academic questions:
 
 
 
+
 ==================================================
 MATHEMATICS
 ==================================================
@@ -229,11 +231,12 @@ Use LaTeX/MathJax notation for mathematical formulas.
 
 Example:
 
-\\\\[
-a = \\\\frac{dv}{dt}
-\\\\]
+\\[
+a = \\frac{dv}{dt}
+\\]
 
 For simple calculations, keep the explanation concise.
+
 
 
 
@@ -253,7 +256,7 @@ For Physics problems:
 
 For example:
 
-\\\\[
+\\[
 F = ma
 \\\\
 
@@ -274,6 +277,8 @@ For Chemistry questions:
 
 
 
+
+
 ==================================================
 BIOLOGY
 ==================================================
@@ -288,6 +293,8 @@ For Biology and NEET questions:
 
 
 
+
+
 ==================================================
 JEE / NEET MODE
 ==================================================
@@ -299,6 +306,8 @@ When the question is clearly related to JEE or NEET:
 - For numerical questions, show a clear solution.
 - If useful, mention a short shortcut or exam tip.
 - Do not sacrifice correctness for brevity.
+
+
 
 
 
@@ -318,6 +327,8 @@ For programming questions:
 
 
 
+
+
 ==================================================
 GENERAL QUESTIONS
 ==================================================
@@ -328,6 +339,8 @@ For general questions:
 - Give context when useful.
 - Avoid unnecessary filler.
 - If the question is ambiguous, ask a concise clarification instead of guessing.
+
+
 
 
 
@@ -349,6 +362,8 @@ If the user says:
 Use the conversation context to determine what they are referring to.
 
 Do not unnecessarily ask the user to repeat information that is already available in the conversation.
+
+
 
 
 
@@ -884,9 +899,7 @@ Hello Prathmesh
 
 If you give me the exact Python problem, I can explain and solve it step by step.`;
   }
-    
-
-
+     
   // ============================================================
   // JAVASCRIPT QUESTIONS
   // ============================================================
@@ -994,344 +1007,262 @@ If you want, ask me a question and I'll help you.`;
 }
 
 
-
 /**
  * ============================================================
- * POST /api/chat
- * ============================================================
- *
- * Send a message, get AI response,
- * and persist exchange in PostgreSQL.
- */
-
-
-/**
- * ============================================================
- * AI RESPONSE GENERATOR
+ * NON-STREAMING AI RESPONSE GENERATOR WITH RETRY
  * ============================================================
  */
 
 async function generateWithRetry(
   genAI,
-  modelName,
+  primaryModel,
   chatHistory,
   message
 ) {
-
-  // ============================================================
-  // AEGIS AI MODEL FALLBACK CHAIN
-  //
-  // 1. NVIDIA Nemotron 3 Ultra
-  // 2. Gemini 3.5 Flash Lite
-  // 3. Gemini 3.6 Flash
-  // 4. Gemini 2.5 Flash
-  // ============================================================
-
   const modelsToTry = [
-    'nemotron-3-ultra-550b-a55b',
-    'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
-    'gemini-2.5-flash'
+    'gemini-3.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro'
   ];
 
-
   for (const currentModel of modelsToTry) {
-
     try {
+      console.log(`[AI GENERATE] Trying model: ${currentModel}`);
 
-      console.log(
-        `[AI] Trying model: ${currentModel}`
-      );
+      const model = genAI.getGenerativeModel({
+        model: currentModel,
+        systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+      });
 
-
-      // ========================================================
-      // NVIDIA NEMOTRON
-      // ========================================================
-
-      if (
-        currentModel ===
-        'nemotron-3-ultra-550b-a55b'
-      ) {
-
-        if (!process.env.NVIDIA_API_KEY) {
-
-          throw new Error(
-            'NVIDIA_API_KEY is not configured.'
-          );
+      const chatSession = model.startChat({
+        history: chatHistory || [],
+        generationConfig: {
+          maxOutputTokens: 2048,
+          temperature: 0.7
         }
+      });
 
+      const result = await chatSession.sendMessage(message);
+      const response = await result.response;
+      const text = response.text();
 
-        const messages = [
-          {
-            role: 'system',
-            content: AEGIS_SYSTEM_INSTRUCTION
-          }
-        ];
-
-
-        // Convert Gemini-style history
-        // to OpenAI/NVIDIA format
-
-        if (Array.isArray(chatHistory)) {
-
-          for (const item of chatHistory) {
-
-            const text = item?.parts
-              ?.map(part => part?.text || '')
-              .join('')
-              .trim();
-
-            if (!text) continue;
-
-
-            messages.push({
-              role:
-                item.role === 'model'
-                  ? 'assistant'
-                  : 'user',
-              content: text
-            });
-          }
-        }
-
-
-        // Current user message
-
-        messages.push({
-          role: 'user',
-          content: message
-        });
-
-
-        const completion =
-          await nvidiaAI.chat.completions.create({
-
-            model:
-              'nvidia/nemotron-3-ultra-550b-a55b',
-
-            messages,
-
-            temperature: 0.7,
-
-            max_tokens: 2048
-          });
-
-
-        const text =
-          completion
-            ?.choices?.[0]
-            ?.message
-            ?.content
-            ?.trim();
-
-
-        if (!text) {
-
-          throw new Error(
-            'Nemotron returned an empty response.'
-          );
-        }
-
-
-        console.log(
-          '[AI] Nemotron 3 Ultra succeeded.'
-        );
-
-
-        // Return Gemini-compatible structure
-
-        return {
-
-          response: {
-
-            text: () => text
-
-          }
-
-        };
+      if (text && text.trim().length > 0) {
+        console.log(`[AI GENERATE] ${currentModel} succeeded.`);
+        return { text: text.trim(), response, model: currentModel };
       }
-
-
-      // ========================================================
-      // GEMINI FALLBACK
-      // ========================================================
-
-      const model =
-        genAI.getGenerativeModel({
-
-          model: currentModel,
-
-          systemInstruction:
-            AEGIS_SYSTEM_INSTRUCTION
-
-        });
-
-
-      const chatSession =
-        model.startChat({
-
-          history: chatHistory,
-
-          generationConfig: {
-
-            maxOutputTokens: 2048,
-
-            temperature: 0.7
-
-          }
-
-        });
-
-
-      const result =
-        await chatSession.sendMessage(
-          message
-        );
-
-
-      console.log(
-        `[AI] ${currentModel} succeeded.`
-      );
-
-
-      return result;
-
-
-    } catch (error) {
-
-      console.warn(
-
-        `[AI] ${currentModel} failed:`,
-
-        error?.message || error
-
-      );
-
-
-      // Automatically continue
-      // to the next model
-
+    } catch (err) {
+      console.warn(`[AI GENERATE] ${currentModel} failed:`, err?.message || err);
       continue;
     }
   }
 
+  // Fallback to NVIDIA if available
+  if (process.env.NVIDIA_API_KEY) {
+    try {
+      console.log('[AI GENERATE] Trying NVIDIA fallback...');
+      const messages = [
+        { role: 'system', content: AEGIS_SYSTEM_INSTRUCTION }
+      ];
 
-  // ============================================================
-  // ALL MODELS FAILED
-  // ============================================================
+      if (Array.isArray(chatHistory)) {
+        for (const item of chatHistory) {
+          const text = item?.parts?.map(part => part?.text || '').join('').trim();
+          if (!text) continue;
+          messages.push({
+            role: item.role === 'model' ? 'assistant' : 'user',
+            content: text
+          });
+        }
+      }
 
-  throw new Error(
-    'All configured AI models are currently unavailable.'
-  );
+      messages.push({ role: 'user', content: message });
+
+      const completion = await nvidiaAI.chat.completions.create({
+        model: 'nvidia/llama-3.1-nemotron-70b-instruct',
+        messages,
+        temperature: 0.7,
+        max_tokens: 2048
+      });
+
+      const content = completion.choices?.[0]?.message?.content;
+      if (content && content.trim().length > 0) {
+        console.log('[AI GENERATE] NVIDIA fallback succeeded.');
+        return { text: content.trim(), response: { text: () => content.trim() }, model: 'nvidia' };
+      }
+    } catch (nErr) {
+      console.warn('[AI GENERATE] NVIDIA fallback failed:', nErr?.message || nErr);
+    }
+  }
+
+  throw new Error('All configured AI models are currently unavailable.');
+}
+
+/**
+ * ============================================================
+ * STREAMING AI RESPONSE GENERATOR
+ * ============================================================
+ */
+
+async function streamWithRetry(
+  genAI,
+  modelName,
+  chatHistory,
+  message,
+  sendEvent
+) {
+  const modelsToTry = [
+    'gemini-3.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro'
+  ];
+
+  for (const currentModel of modelsToTry) {
+    try {
+      console.log(`[AI STREAM] Trying model: ${currentModel}`);
+
+      const model = genAI.getGenerativeModel({
+        model: currentModel,
+        systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+      });
+
+      const chatSession = model.startChat({
+        history: chatHistory || [],
+        generationConfig: {
+          maxOutputTokens: 2048,
+          temperature: 0.7
+        }
+      });
+
+      const result = await chatSession.sendMessageStream(message);
+
+      let fullText = '';
+      for await (const chunk of result.stream) {
+        const text = chunk.text();
+        if (text) {
+          fullText += text;
+          sendEvent('token', { content: text });
+        }
+      }
+
+      if (fullText && fullText.trim().length > 0) {
+        console.log(`[AI STREAM] ${currentModel} succeeded.`);
+        return { text: fullText.trim(), model: currentModel };
+      }
+
+    } catch (error) {
+      console.warn(`[AI STREAM] ${currentModel} failed:`, error?.message || error);
+      continue;
+    }
+  }
+
+  // Fallback to NVIDIA streaming if available
+  if (process.env.NVIDIA_API_KEY) {
+    try {
+      console.log('[AI STREAM] Trying NVIDIA streaming fallback...');
+      const messages = [
+        { role: 'system', content: AEGIS_SYSTEM_INSTRUCTION }
+      ];
+
+      if (Array.isArray(chatHistory)) {
+        for (const item of chatHistory) {
+          const text = item?.parts?.map(part => part?.text || '').join('').trim();
+          if (!text) continue;
+          messages.push({
+            role: item.role === 'model' ? 'assistant' : 'user',
+            content: text
+          });
+        }
+      }
+
+      messages.push({ role: 'user', content: message });
+
+      const stream = await nvidiaAI.chat.completions.create({
+        model: 'nvidia/llama-3.1-nemotron-70b-instruct',
+        messages,
+        temperature: 0.7,
+        max_tokens: 2048,
+        stream: true
+      });
+
+      let fullText = '';
+      for await (const chunk of stream) {
+        const content = chunk.choices?.[0]?.delta?.content;
+        if (content) {
+          fullText += content;
+          sendEvent('token', { content });
+        }
+      }
+
+      if (fullText && fullText.trim().length > 0) {
+        console.log('[AI STREAM] NVIDIA streaming succeeded.');
+        return { text: fullText.trim(), model: 'nvidia' };
+      }
+    } catch (nErr) {
+      console.warn('[AI STREAM] NVIDIA streaming fallback failed:', nErr?.message || nErr);
+    }
+  }
+
+  throw new Error('All configured AI models are currently unavailable.');
 }
 
 
 /**
  * ============================================================
- * WEB SEARCH
+ * WEB SEARCH (Non-streaming - used by both endpoints)
  * ============================================================
  */
 
 async function generateWebSearchResponse(query) {
+  console.log('[WEB SEARCH] Searching with Tavily:', query);
 
-  console.log(
-    '[WEB SEARCH] Searching with Tavily:',
-    query
+  const searchResult = await tavilyClient.search(
+    query,
+    {
+      searchDepth: 'advanced',
+      maxResults: 5,
+      includeAnswer: true
+    }
   );
 
-
-  const searchResult =
-    await tavilyClient.search(
-
-      query,
-
-      {
-        searchDepth: 'advanced',
-
-        maxResults: 5,
-
-        includeAnswer: true
-      }
-
-    );
-
-
   if (!searchResult) {
-
-    throw new Error(
-      'Tavily returned no result.'
-    );
+    throw new Error('Tavily returned no result.');
   }
 
-
-  const results =
-    searchResult.results || [];
-
+  const results = searchResult.results || [];
 
   if (results.length === 0) {
-
-    throw new Error(
-      'Tavily returned no search results.'
-    );
+    throw new Error('Tavily returned no search results.');
   }
 
+  const sourceLinks = results.map((item, index) => ({
+    number: index + 1,
+    title: item.title,
+    url: item.url
+  }));
 
-  const sourceLinks =
-    results.map((item, index) => ({
-
-      number: index + 1,
-
-      title: item.title,
-
-      url: item.url
-
-    }));
-
-
-  const researchText =
-    results
-
-      .map((item, index) =>
-
-        `SOURCE ${index + 1}
+  const researchText = results
+    .map((item, index) =>
+      `SOURCE ${index + 1}
 Title: ${item.title}
 URL: ${item.url}
 Content: ${item.content || ''}`
+    )
+    .join('\n\n');
 
-      )
-
-      .join('\n\n');
-
-
-  const geminiApiKey =
-    (process.env.GEMINI_API_KEY || '')
-      .trim();
-
+  const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
 
   if (!geminiApiKey) {
-
-    throw new Error(
-      'GEMINI_API_KEY is not configured.'
-    );
+    throw new Error('GEMINI_API_KEY is not configured.');
   }
 
+  const genAI = new GoogleGenerativeAI(geminiApiKey);
 
-  const genAI =
-    new GoogleGenerativeAI(
-      geminiApiKey
-    );
-
-
-  const model =
-    genAI.getGenerativeModel({
-
-      model: 'gemini-3.6-flash',
-
-      systemInstruction:
-        AEGIS_SYSTEM_INSTRUCTION
-
-    });
-
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-3.5-flash',
+    systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+  });
 
   const prompt = `
 You are Aegis AI.
@@ -1371,58 +1302,32 @@ Respond in the SAME language and writing style as the user's query.
 Do NOT automatically translate the answer into English.
 `;
 
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  const text = response.text();
 
-  const result =
-    await model.generateContent(
-      prompt
-    );
-
-
-  const response =
-    await result.response;
-
-
-  const text =
-    response.text();
-
-
-  if (
-    !text ||
-    text.trim().length === 0
-  ) {
-
-    throw new Error(
-      'Gemini returned an empty answer.'
-    );
+  if (!text || text.trim().length === 0) {
+    throw new Error('Gemini returned an empty answer.');
   }
 
-
-  console.log(
-    '[WEB SEARCH] Tavily + Gemini completed.'
-  );
-
+  console.log('[WEB SEARCH] Tavily + Gemini completed.');
 
   return {
-
     text: text.trim(),
-
     sources: sourceLinks
-
   };
 }
+
 // ============================================================
-// POST /api/chat
+// POST /api/chat (EXISTING - NON-STREAMING)
 // ============================================================
 
 router.post('/', async (req, res) => {
-
   try {
-
     let {
       conversationId,
       message
     } = req.body;
-
 
     // ========================================================
     // 1. VALIDATE MESSAGE
@@ -1433,23 +1338,14 @@ router.post('/', async (req, res) => {
       typeof message !== 'string' ||
       message.trim().length === 0
     ) {
-
       return res.status(400).json({
-
         success: false,
-
-        error:
-          'Message content is required.'
-
+        error: 'Message content is required.'
       });
     }
 
-
-    const cleanMessage =
-      message.trim();
-
+    const cleanMessage = message.trim();
     let webSources = [];
-
 
     // ========================================================
     // 2. CREATE / VERIFY CONVERSATION
@@ -1457,97 +1353,53 @@ router.post('/', async (req, res) => {
 
     let isNewConversation = false;
 
-
     if (!conversationId) {
-
       conversationId = uuidv4();
 
-
-      const initialTitle =
-        cleanMessage.length > 40
-          ? `${cleanMessage.substring(0, 40)}...`
-          : cleanMessage;
-
+      const initialTitle = cleanMessage.length > 40
+        ? `${cleanMessage.substring(0, 40)}...`
+        : cleanMessage;
 
       await conversationQueries.create(
-
         conversationId,
-
         req.user.id,
-
         initialTitle
-
       );
 
-
       isNewConversation = true;
-
-
     } else {
-
-      const existingConv =
-        await conversationQueries.getByIdAndUser(
-
-          conversationId,
-
-          req.user.id
-
-        );
-
+      const existingConv = await conversationQueries.getByIdAndUser(
+        conversationId,
+        req.user.id
+      );
 
       if (!existingConv) {
-
         return res.status(404).json({
-
           success: false,
-
-          error:
-            'Conversation not found or access denied.'
-
+          error: 'Conversation not found or access denied.'
         });
       }
     }
-
 
     // ========================================================
     // 3. SAVE USER MESSAGE
     // ========================================================
 
-    const userMsgResult =
-      await messageQueries.add(
-
-        conversationId,
-
-        'user',
-
-        cleanMessage
-
-      );
-
-
-    await conversationQueries.touchUpdatedAt(
-
-      conversationId
-
+    const userMsgResult = await messageQueries.add(
+      conversationId,
+      'user',
+      cleanMessage
     );
 
+    await conversationQueries.touchUpdatedAt(conversationId);
 
     // ========================================================
     // 4. GET CONVERSATION HISTORY
     // ========================================================
 
     const recentMessages = (
-
-      await messageQueries.getRecentContext(
-
-        conversationId,
-
-        20
-
-      )
-
+      await messageQueries.getRecentContext(conversationId, 20)
     ).reverse();
-
 
     // ========================================================
     // 5. GENERATE AI RESPONSE
@@ -1555,233 +1407,95 @@ router.post('/', async (req, res) => {
 
     let assistantResponseText = '';
 
-
-    const geminiApiKey =
-      (process.env.GEMINI_API_KEY || '')
-        .trim();
-
+    const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
 
     if (geminiApiKey) {
-
       try {
-
-        const genAI =
-          new GoogleGenerativeAI(
-
-            geminiApiKey
-
-          );
-
+        const genAI = new GoogleGenerativeAI(geminiApiKey);
 
         // ====================================================
         // Build Gemini history
         // ====================================================
 
         const historyForGemini = [];
-
         let expectedRole = 'user';
 
-
-        for (
-          const m of recentMessages.slice(0, -1)
-        ) {
-
-          const role =
-            m.role === 'assistant'
-              ? 'model'
-              : 'user';
-
+        for (const m of recentMessages.slice(0, -1)) {
+          const role = m.role === 'assistant' ? 'model' : 'user';
 
           if (role === expectedRole) {
-
             historyForGemini.push({
-
               role,
-
-              parts: [
-
-                {
-                  text: m.content
-                }
-
-              ]
-
+              parts: [{ text: m.content }]
             });
 
-
-            expectedRole =
-              expectedRole === 'user'
-                ? 'model'
-                : 'user';
-
+            expectedRole = expectedRole === 'user' ? 'model' : 'user';
           }
-
         }
-
 
         // ====================================================
         // Decide whether web search is needed
         // ====================================================
 
-        const needsWebSearch =
-          /latest|today|news|current|recent|weather|price|stock|score|live|2026/i
-            .test(cleanMessage);
-
+        const needsWebSearch = /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(cleanMessage);
 
         // ====================================================
         // WEB SEARCH
         // ====================================================
 
         if (needsWebSearch) {
+          console.log('[WEB SEARCH] Using web search for:', cleanMessage);
 
-          console.log(
-
-            '[WEB SEARCH] Using web search for:',
-
-            cleanMessage
-
-          );
-
-
-          const webResult =
-            await generateWebSearchResponse(
-
-              cleanMessage
-
-            );
-
-
-          assistantResponseText =
-            webResult.text;
-
-
-          webSources =
-            webResult.sources || [];
-
-
+          const webResult = await generateWebSearchResponse(cleanMessage);
+          assistantResponseText = webResult.text;
+          webSources = webResult.sources || [];
         } else {
-
           // ==================================================
           // NORMAL AI RESPONSE
           // ==================================================
 
-          const result =
-            await generateWithRetry(
+          const result = await generateWithRetry(
+            genAI,
+            'gemini-3.5-flash',
+            historyForGemini,
+            cleanMessage
+          );
 
-              genAI,
-
-              'gemini-3.5-flash',
-
-              historyForGemini,
-
-              cleanMessage
-
-            );
-
-
-          const response =
-            await result.response;
-
-
-          assistantResponseText =
-            response.text();
-
+          assistantResponseText = result.text;
         }
-
 
         // ====================================================
         // Safety check
         // ====================================================
 
-        if (
-
-          !assistantResponseText ||
-
-          assistantResponseText
-            .trim()
-            .length === 0
-
-        ) {
-
-          throw new Error(
-
-            'AI returned an empty response.'
-
-          );
-
+        if (!assistantResponseText || assistantResponseText.trim().length === 0) {
+          throw new Error('AI returned an empty response.');
         }
 
-
       } catch (aiErr) {
-
-        console.warn(
-
-          '[AI] Gemini error. Using Aegis fallback:',
-
-          aiErr.message
-
-        );
-
-
-        assistantResponseText =
-          generateFallbackResponse(
-
-            cleanMessage,
-
-            recentMessages
-
-          );
-
+        console.warn('[AI] Gemini error. Using Aegis fallback:', aiErr.message);
+        assistantResponseText = generateFallbackResponse(cleanMessage, recentMessages);
       }
-
-
     } else {
-
       // ======================================================
       // GEMINI API KEY NOT CONFIGURED
       // ======================================================
 
-      console.warn(
-
-        '[AI] GEMINI_API_KEY is not configured.'
-
-      );
-
-
-      assistantResponseText =
-        generateFallbackResponse(
-
-          cleanMessage,
-
-          recentMessages
-
-        );
-
+      console.warn('[AI] GEMINI_API_KEY is not configured.');
+      assistantResponseText = generateFallbackResponse(cleanMessage, recentMessages);
     }
-
 
     // ========================================================
     // 6. SAVE ASSISTANT RESPONSE
     // ========================================================
 
-    const assistantMsgResult =
-      await messageQueries.add(
-
-        conversationId,
-
-        'assistant',
-
-        assistantResponseText
-
-      );
-
-
-    await conversationQueries.touchUpdatedAt(
-
-      conversationId
-
+    const assistantMsgResult = await messageQueries.add(
+      conversationId,
+      'assistant',
+      assistantResponseText
     );
 
+    await conversationQueries.touchUpdatedAt(conversationId);
 
     // ========================================================
     // 7. UPDATE CONVERSATION TITLE
@@ -1789,139 +1503,262 @@ router.post('/', async (req, res) => {
 
     let updatedTitle = null;
 
-
-    const currentConv =
-      await conversationQueries.getByIdAndUser(
-
-        conversationId,
-
-        req.user.id
-
-      );
-
+    const currentConv = await conversationQueries.getByIdAndUser(
+      conversationId,
+      req.user.id
+    );
 
     if (
-
       currentConv &&
-
       (
-
-        currentConv.title ===
-          'New Conversation' ||
-
+        currentConv.title === 'New Conversation' ||
         isNewConversation
-
       )
-
     ) {
-
-      const generatedTitle =
-        cleanMessage.length > 40
-
-          ? `${cleanMessage.substring(0, 40)}...`
-
-          : cleanMessage;
-
+      const generatedTitle = cleanMessage.length > 40
+        ? `${cleanMessage.substring(0, 40)}...`
+        : cleanMessage;
 
       await conversationQueries.updateTitle(
-
         generatedTitle,
-
         conversationId,
-
         req.user.id
-
       );
 
-
-      updatedTitle =
-        generatedTitle;
-
+      updatedTitle = generatedTitle;
     }
-
 
     // ========================================================
     // 8. SEND RESPONSE TO FRONTEND
     // ========================================================
 
     return res.json({
-
       success: true,
-
       conversationId,
-
       updatedTitle,
-
-
       userMessage: {
-
-        id:
-          userMsgResult.id,
-
-        conversation_id:
-          conversationId,
-
-        role:
-          'user',
-
-        content:
-          cleanMessage,
-
-        created_at:
-          userMsgResult.created_at ||
-          new Date().toISOString()
-
+        id: userMsgResult.id,
+        conversation_id: conversationId,
+        role: 'user',
+        content: cleanMessage,
+        created_at: userMsgResult.created_at || new Date().toISOString()
       },
-
-
       assistantMessage: {
-
-        id:
-          assistantMsgResult.id,
-
-        conversation_id:
-          conversationId,
-
-        role:
-          'assistant',
-
-        content:
-          assistantResponseText,
-
-        sources:
-          webSources,
-
-        created_at:
-          assistantMsgResult.created_at ||
-          new Date().toISOString()
-
+        id: assistantMsgResult.id,
+        conversation_id: conversationId,
+        role: 'assistant',
+        content: assistantResponseText,
+        sources: webSources,
+        created_at: assistantMsgResult.created_at || new Date().toISOString()
       }
-
     });
-
 
   } catch (err) {
-
-    console.error(
-
-      'Chat endpoint error:',
-
-      err
-
-    );
-
-
+    console.error('Chat endpoint error:', err);
     return res.status(500).json({
-
       success: false,
+      error: 'An error occurred while processing your message.'
+    });
+  }
+});
 
-      error:
-        'An error occurred while processing your message.'
 
+// ============================================================
+// POST /api/chat/stream (NEW - STREAMING ENDPOINT)
+// ============================================================
+
+router.post('/stream', async (req, res) => {
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const sendEvent = (type, data) => {
+    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  };
+
+  const sendError = (message, recoverable = false) => {
+    sendEvent('error', { message, recoverable });
+  };
+
+  const sendDone = (conversationId, messageId) => {
+    sendEvent('done', { conversationId, messageId });
+  };
+
+  try {
+    let { conversationId, message } = req.body;
+
+    // 1. VALIDATE MESSAGE
+    if (!message || typeof message !== 'string' || message.trim().length === 0) {
+      sendError('Message content is required.', false);
+      return res.end();
+    }
+
+    const cleanMessage = message.trim();
+    let webSources = [];
+    let isNewConversation = false;
+
+    // 2. CREATE / VERIFY CONVERSATION
+    if (!conversationId) {
+      conversationId = uuidv4();
+      const initialTitle = cleanMessage.length > 40
+        ? `${cleanMessage.substring(0, 40)}...`
+        : cleanMessage;
+
+      await conversationQueries.create(conversationId, req.user.id, initialTitle);
+      isNewConversation = true;
+    } else {
+      const existingConv = await conversationQueries.getByIdAndUser(conversationId, req.user.id);
+      if (!existingConv) {
+        sendError('Conversation not found or access denied.', false);
+        return res.end();
+      }
+    }
+
+    // 3. SAVE USER MESSAGE
+    const userMsgResult = await messageQueries.add(conversationId, 'user', cleanMessage);
+    await conversationQueries.touchUpdatedAt(conversationId);
+
+    // Send user message confirmation
+    sendEvent('user_message', {
+      id: userMsgResult.id,
+      conversation_id: conversationId,
+      role: 'user',
+      content: cleanMessage,
+      created_at: userMsgResult.created_at || new Date().toISOString()
     });
 
-  }
+    // 4. GET CONVERSATION HISTORY
+    const recentMessages = (
+      await messageQueries.getRecentContext(conversationId, 20)
+    ).reverse();
 
+    // 5. GENERATE AI RESPONSE (STREAMING)
+    let assistantResponseText = '';
+    let assistantMessageId = null;
+
+    const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
+
+    if (geminiApiKey) {
+      try {
+        const genAI = new GoogleGenerativeAI(geminiApiKey);
+
+        // Build Gemini history
+        const historyForGemini = [];
+        let expectedRole = 'user';
+
+        for (const m of recentMessages.slice(0, -1)) {
+          const role = m.role === 'assistant' ? 'model' : 'user';
+          if (role === expectedRole) {
+            historyForGemini.push({
+              role,
+              parts: [{ text: m.content }]
+            });
+            expectedRole = expectedRole === 'user' ? 'model' : 'user';
+          }
+        }
+
+        // Decide whether web search is needed
+        const needsWebSearch = /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(cleanMessage);
+
+        // Send assistant_start event before streaming begins
+        sendEvent('assistant_start', { conversationId });
+
+        if (needsWebSearch) {
+          // Web search is non-streaming - send as complete response
+          console.log('[WEB SEARCH STREAM] Using web search for:', cleanMessage);
+          sendEvent('thinking', { status: 'searching' });
+
+          const webResult = await generateWebSearchResponse(cleanMessage);
+          assistantResponseText = webResult.text;
+          webSources = webResult.sources || [];
+
+          // Stream the web search result as tokens for consistent UX
+          const words = assistantResponseText.split(/(\s+)/);
+          for (const word of words) {
+            if (word) {
+              sendEvent('assistant_chunk', { content: word });
+              // Small delay to simulate streaming
+              await new Promise(r => setTimeout(r, 10));
+            }
+          }
+        } else {
+          // Normal AI streaming - wrap sendEvent to convert 'token' to 'assistant_chunk'
+          const streamSendEvent = (type, data) => {
+            if (type === 'token') {
+              sendEvent('assistant_chunk', data);
+            } else {
+              sendEvent(type, data);
+            }
+          };
+          const streamResult = await streamWithRetry(genAI, 'gemini-3.5-flash', historyForGemini, cleanMessage, streamSendEvent);
+          assistantResponseText = streamResult.text;
+        }
+
+        // Safety check
+        if (!assistantResponseText || assistantResponseText.trim().length === 0) {
+          throw new Error('AI returned an empty response.');
+        }
+
+      } catch (aiErr) {
+        console.warn('[AI STREAM] Error. Using Aegis fallback:', aiErr.message);
+        assistantResponseText = generateFallbackResponse(cleanMessage, recentMessages);
+        // Stream fallback response
+        const words = assistantResponseText.split(/(\s+)/);
+        for (const word of words) {
+          if (word) {
+            sendEvent('assistant_chunk', { content: word });
+            await new Promise(r => setTimeout(r, 10));
+          }
+        }
+      }
+    } else {
+      // GEMINI API KEY NOT CONFIGURED
+      console.warn('[AI STREAM] GEMINI_API_KEY is not configured.');
+      assistantResponseText = generateFallbackResponse(cleanMessage, recentMessages);
+      const words = assistantResponseText.split(/(\s+)/);
+      for (const word of words) {
+        if (word) {
+          sendEvent('assistant_chunk', { content: word });
+          await new Promise(r => setTimeout(r, 10));
+        }
+      }
+    }
+
+    // 6. SAVE ASSISTANT RESPONSE
+    const assistantMsgResult = await messageQueries.add(conversationId, 'assistant', assistantResponseText);
+    assistantMessageId = assistantMsgResult.id;
+    await conversationQueries.touchUpdatedAt(conversationId);
+
+    // 7. UPDATE CONVERSATION TITLE
+    let updatedTitle = null;
+    const currentConv = await conversationQueries.getByIdAndUser(conversationId, req.user.id);
+
+    if (currentConv && (currentConv.title === 'New Conversation' || isNewConversation)) {
+      const generatedTitle = cleanMessage.length > 40
+        ? `${cleanMessage.substring(0, 40)}...`
+        : cleanMessage;
+
+      await conversationQueries.updateTitle(generatedTitle, conversationId, req.user.id);
+      updatedTitle = generatedTitle;
+    }
+
+    // 8. SEND COMPLETION EVENT (assistant_complete with all data)
+    sendEvent('assistant_complete', {
+      conversationId,
+      messageId: assistantMessageId,
+      content: assistantResponseText,
+      sources: webSources,
+      updatedTitle
+    });
+
+  } catch (err) {
+    console.error('Stream chat endpoint error:', err);
+    sendError('An error occurred while processing your message.', false);
+  } finally {
+    res.end();
+  }
 });
 
 
