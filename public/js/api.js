@@ -95,6 +95,13 @@ const API = {
     });
   },
 
+  async googleSignIn(idToken) {
+    return this.request('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ id_token: idToken })
+    });
+  },
+
   async logout() {
     try {
       await this.request('/auth/logout', { method: 'POST' });

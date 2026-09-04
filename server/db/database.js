@@ -35,10 +35,14 @@ async function initDatabase() {
         id SERIAL PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
         email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
+        password_hash TEXT,
         role TEXT NOT NULL DEFAULT 'user',
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        last_login_at TIMESTAMPTZ
+        last_login_at TIMESTAMPTZ,
+        google_id TEXT UNIQUE,
+        avatar_url TEXT,
+        auth_provider TEXT NOT NULL DEFAULT 'email'
+          CHECK (auth_provider IN ('email', 'google'))
       );
     `);
 
@@ -77,6 +81,11 @@ async function initDatabase() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_users_username
       ON users(username);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_users_google_id
+      ON users(google_id);
     `);
 
     await client.query(`
@@ -150,9 +159,9 @@ async function seedAdminUser() {
       await pool.query(
         `
           INSERT INTO users
-            (username, email, password_hash, role)
+            (username, email, password_hash, role, auth_provider)
           VALUES
-            ($1, $2, $3, 'admin')
+            ($1, $2, $3, 'admin', 'email')
         `,
         [
           adminUsername,
@@ -342,6 +351,88 @@ const userQueries = {
       `,
       [id]
     );
+  },
+
+
+  /**
+   * Get user by Google ID
+   * Used for Google Sign-In to find existing Google-linked accounts
+   */
+  async getByGoogleId(googleId) {
+    await databaseReady;
+
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          username,
+          email,
+          role,
+          created_at,
+          last_login_at,
+          google_id,
+          avatar_url,
+          auth_provider
+        FROM users
+        WHERE google_id = $1
+        LIMIT 1
+      `,
+      [googleId]
+    );
+
+    return result.rows[0] || null;
+  },
+
+
+  /**
+   * Create a new Google-only user
+   * password_hash will be NULL for Google-only users
+   * auth_provider will be 'google'
+   */
+  async createGoogleUser(username, email, googleId, avatarUrl) {
+    await databaseReady;
+
+    const result = await pool.query(
+      `
+        INSERT INTO users
+          (username, email, password_hash, role, google_id, avatar_url, auth_provider)
+        VALUES
+          ($1, LOWER($2), NULL, 'user', $3, $4, 'google')
+        RETURNING *
+      `,
+      [
+        username,
+        email,
+        googleId,
+        avatarUrl
+      ]
+    );
+
+    return result.rows[0];
+  },
+
+
+  /**
+   * Link a Google ID to an existing email/password user
+   * This should only be called explicitly by the user in account settings
+   * (not automatically during login)
+   */
+  async linkGoogleId(userId, googleId, avatarUrl) {
+    await databaseReady;
+
+    const result = await pool.query(
+      `
+        UPDATE users
+        SET google_id = $2,
+            avatar_url = COALESCE($3, avatar_url),
+            auth_provider = 'google'
+        WHERE id = $1
+        RETURNING *
+      `,
+      [userId, googleId, avatarUrl]
+    );
+
+    return result.rows[0] || null;
   },
 
 

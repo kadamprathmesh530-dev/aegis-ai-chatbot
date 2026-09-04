@@ -29,23 +29,35 @@ app.use(
           "'self'",
           "'unsafe-inline'",
           'https://cdn.jsdelivr.net',
-          'https://cdnjs.cloudflare.com'
+          'https://cdnjs.cloudflare.com',
+          'https://accounts.google.com'
         ],
         styleSrc: [
-          "'self'",
-          "'unsafe-inline'",
-          'https://fonts.googleapis.com',
-          'https://cdnjs.cloudflare.com',
-          'https://cdn.jsdelivr.net'
-        ],
+    "'self'",
+    "'unsafe-inline'",
+    'https://fonts.googleapis.com',
+    'https://cdnjs.cloudflare.com',
+    'https://cdn.jsdelivr.net',
+    'https://accounts.google.com'
+],
         fontSrc: [
           "'self'",
           'https://fonts.gstatic.com',
           'https://cdnjs.cloudflare.com'
         ],
         imgSrc: ["'self'", 'data:', 'https:'],
-        connectSrc: ["'self'"]
+        frameSrc: [
+  "'self'",
+  "https://accounts.google.com"
+],
+ connectSrc: [
+  "'self'",
+  "https://accounts.google.com"
+],       
       }
+    },
+    crossOriginOpenerPolicy: {
+    policy: 'same-origin-allow-popups'
     },
     crossOriginEmbedderPolicy: false
   })
