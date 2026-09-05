@@ -28,7 +28,7 @@ const nvidiaAI = new OpenAI({
 
 async function testWebSearch(query) {
   const response = await webAI.models.generateContent({
-    model: 'gemini-3.5-flash',
+    model: 'gemini-3.7-flash',
     contents: query,
     config: {
       tools: [
@@ -1019,16 +1019,115 @@ async function generateWithRetry(
   chatHistory,
   message
 ) {
+  // =========================================================
+  // 🧠 PRIMARY BRAIN — NVIDIA NEMOTRON 3 ULTRA
+  // =========================================================
+
+  if (process.env.NVIDIA_API_KEY) {
+    try {
+      console.log(
+        '[AI GENERATE] 🧠 Trying primary brain: Nemotron 3 Ultra'
+      );
+
+      const messages = [
+        {
+          role: 'system',
+          content: AEGIS_SYSTEM_INSTRUCTION
+        }
+      ];
+
+      // Convert Gemini-style history to OpenAI/NVIDIA format
+      if (Array.isArray(chatHistory)) {
+        for (const item of chatHistory) {
+          const text = item?.parts
+            ?.map(part => part?.text || '')
+            .join('')
+            .trim();
+
+          if (!text) continue;
+
+          messages.push({
+            role:
+              item.role === 'model'
+                ? 'assistant'
+                : 'user',
+            content: text
+          });
+        }
+      }
+
+      // Current user message
+      messages.push({
+        role: 'user',
+        content: message
+      });
+
+      const completion =
+        await nvidiaAI.chat.completions.create({
+          model:
+            'nvidia/nemotron-3-ultra-550b-a55b',
+
+          messages,
+
+          max_tokens: 4096,
+        });
+
+      const content =
+        completion.choices?.[0]?.message?.content;
+
+      if (
+        content &&
+        content.trim().length > 0
+      ) {
+        console.log(
+          '[AI GENERATE] 🧠 Nemotron 3 Ultra succeeded.'
+        );
+
+        return {
+          text: content.trim(),
+
+          response: {
+            text: () => content.trim()
+          },
+
+          model:
+            'nvidia/nemotron-3-ultra-550b-a55b'
+        };
+      }
+
+      throw new Error(
+        'Nemotron 3 Ultra returned an empty response'
+      );
+
+    } catch (nErr) {
+      console.warn(
+        '[AI GENERATE] 🧠 Nemotron 3 Ultra failed:',
+        nErr?.message || nErr
+      );
+    }
+  } else {
+    console.warn(
+      '[AI GENERATE] NVIDIA_API_KEY not configured. Skipping Nemotron.'
+    );
+  }
+
+  // =========================================================
+  // 🥈 GEMINI FALLBACK
+  // =========================================================
+
   const modelsToTry = [
-    'gemini-3.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro'
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite'
   ];
+
+  let lastError = null;
 
   for (const currentModel of modelsToTry) {
     try {
-      console.log(`[AI GENERATE] Trying model: ${currentModel}`);
+      console.log(
+        `[AI GENERATE] 🥈 Trying Gemini fallback: ${currentModel}`
+      );
 
       const model = genAI.getGenerativeModel({
         model: currentModel,
@@ -1038,64 +1137,58 @@ async function generateWithRetry(
       const chatSession = model.startChat({
         history: chatHistory || [],
         generationConfig: {
-          maxOutputTokens: 2048,
-          temperature: 0.7
+          maxOutputTokens: 1024
         }
       });
 
-      const result = await chatSession.sendMessage(message);
+      const result =
+        await chatSession.sendMessage(message);
+
       const response = await result.response;
+
       const text = response.text();
 
-      if (text && text.trim().length > 0) {
-        console.log(`[AI GENERATE] ${currentModel} succeeded.`);
-        return { text: text.trim(), response, model: currentModel };
+      if (
+        text &&
+        text.trim().length > 0
+      ) {
+        console.log(
+          `[AI GENERATE] 🥈 Gemini ${currentModel} succeeded.`
+        );
+
+        return {
+          text: text.trim(),
+          response,
+          model: currentModel
+        };
       }
+
+      throw new Error(
+        `${currentModel} returned empty response`
+      );
+
     } catch (err) {
-      console.warn(`[AI GENERATE] ${currentModel} failed:`, err?.message || err);
+      lastError = err;
+
+      console.warn(
+        `[AI GENERATE] 🥈 Gemini ${currentModel} failed:`,
+        err?.message || err
+      );
+
       continue;
     }
   }
 
-  // Fallback to NVIDIA if available
-  if (process.env.NVIDIA_API_KEY) {
-    try {
-      console.log('[AI GENERATE] Trying NVIDIA fallback...');
-      const messages = [
-        { role: 'system', content: AEGIS_SYSTEM_INSTRUCTION }
-      ];
+  // =========================================================
+  // ❌ ALL AI PROVIDERS FAILED
+  // =========================================================
 
-      if (Array.isArray(chatHistory)) {
-        for (const item of chatHistory) {
-          const text = item?.parts?.map(part => part?.text || '').join('').trim();
-          if (!text) continue;
-          messages.push({
-            role: item.role === 'model' ? 'assistant' : 'user',
-            content: text
-          });
-        }
-      }
-
-      messages.push({ role: 'user', content: message });
-
-      const completion = await nvidiaAI.chat.completions.create({
-        model: 'nvidia/llama-3.1-nemotron-70b-instruct',
-        messages,
-        temperature: 0.7,
-        max_tokens: 2048
-      });
-
-      const content = completion.choices?.[0]?.message?.content;
-      if (content && content.trim().length > 0) {
-        console.log('[AI GENERATE] NVIDIA fallback succeeded.');
-        return { text: content.trim(), response: { text: () => content.trim() }, model: 'nvidia' };
-      }
-    } catch (nErr) {
-      console.warn('[AI GENERATE] NVIDIA fallback failed:', nErr?.message || nErr);
-    }
-  }
-
-  throw new Error('All configured AI models are currently unavailable.');
+  throw (
+    lastError ||
+    new Error(
+      'All configured AI models are currently unavailable.'
+    )
+  );
 }
 
 /**
@@ -1111,16 +1204,122 @@ async function streamWithRetry(
   message,
   sendEvent
 ) {
+  // =========================================================
+  // 🧠 PRIMARY BRAIN — NVIDIA NEMOTRON 3 ULTRA
+  // =========================================================
+
+  if (process.env.NVIDIA_API_KEY) {
+    try {
+      console.log(
+        '[AI STREAM] 🧠 Trying primary brain: Nemotron 3 Ultra'
+      );
+
+      const messages = [
+        {
+          role: 'system',
+          content: AEGIS_SYSTEM_INSTRUCTION
+        }
+      ];
+
+      // Convert Gemini-style history to NVIDIA/OpenAI format
+      if (Array.isArray(chatHistory)) {
+        for (const item of chatHistory) {
+          const text = item?.parts
+            ?.map(part => part?.text || '')
+            .join('')
+            .trim();
+
+          if (!text) continue;
+
+          messages.push({
+            role:
+              item.role === 'model'
+                ? 'assistant'
+                : 'user',
+            content: text
+          });
+        }
+      }
+
+      // Current user message
+      messages.push({
+        role: 'user',
+        content: message
+      });
+
+      const stream =
+        await nvidiaAI.chat.completions.create({
+          model:
+            'nvidia/nemotron-3-ultra-550b-a55b',
+
+          messages,
+
+          max_tokens: 4096,
+
+          stream: true,
+
+        });
+
+      let fullText = '';
+
+      for await (const chunk of stream) {
+        const content =
+          chunk.choices?.[0]?.delta?.content;
+
+        if (content) {
+          fullText += content;
+
+          sendEvent('token', {
+            content
+          });
+        }
+      }
+
+      if (fullText.trim().length > 0) {
+        console.log(
+          '[AI STREAM] 🧠 Nemotron 3 Ultra succeeded.'
+        );
+
+        return {
+          text: fullText.trim(),
+          model:
+            'nvidia/nemotron-3-ultra-550b-a55b'
+        };
+      }
+
+      throw new Error(
+        'Nemotron 3 Ultra returned empty stream'
+      );
+
+    } catch (nErr) {
+      console.warn(
+        '[AI STREAM] 🧠 Nemotron 3 Ultra failed:',
+        nErr?.message || nErr
+      );
+    }
+  } else {
+    console.warn(
+      '[AI STREAM] NVIDIA_API_KEY not configured. Skipping Nemotron.'
+    );
+  }
+
+  // =========================================================
+  // 🥈 GEMINI FALLBACK
+  // =========================================================
+
   const modelsToTry = [
-    'gemini-3.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro'
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite'
   ];
+
+  let lastError = null;
 
   for (const currentModel of modelsToTry) {
     try {
-      console.log(`[AI STREAM] Trying model: ${currentModel}`);
+      console.log(
+        `[AI STREAM] 🥈 Trying Gemini fallback: ${currentModel}`
+      );
 
       const model = genAI.getGenerativeModel({
         model: currentModel,
@@ -1130,192 +1329,64 @@ async function streamWithRetry(
       const chatSession = model.startChat({
         history: chatHistory || [],
         generationConfig: {
-          maxOutputTokens: 2048,
-          temperature: 0.7
+          maxOutputTokens: 1024
         }
       });
 
-      const result = await chatSession.sendMessageStream(message);
+      const result =
+        await chatSession.sendMessageStream(message);
 
       let fullText = '';
+
       for await (const chunk of result.stream) {
         const text = chunk.text();
+
         if (text) {
           fullText += text;
-          sendEvent('token', { content: text });
-        }
-      }
 
-      if (fullText && fullText.trim().length > 0) {
-        console.log(`[AI STREAM] ${currentModel} succeeded.`);
-        return { text: fullText.trim(), model: currentModel };
-      }
-
-    } catch (error) {
-      console.warn(`[AI STREAM] ${currentModel} failed:`, error?.message || error);
-      continue;
-    }
-  }
-
-  // Fallback to NVIDIA streaming if available
-  if (process.env.NVIDIA_API_KEY) {
-    try {
-      console.log('[AI STREAM] Trying NVIDIA streaming fallback...');
-      const messages = [
-        { role: 'system', content: AEGIS_SYSTEM_INSTRUCTION }
-      ];
-
-      if (Array.isArray(chatHistory)) {
-        for (const item of chatHistory) {
-          const text = item?.parts?.map(part => part?.text || '').join('').trim();
-          if (!text) continue;
-          messages.push({
-            role: item.role === 'model' ? 'assistant' : 'user',
+          sendEvent('token', {
             content: text
           });
         }
       }
 
-      messages.push({ role: 'user', content: message });
+      if (fullText.trim().length > 0) {
+        console.log(
+          `[AI STREAM] 🥈 Gemini ${currentModel} succeeded.`
+        );
 
-      const stream = await nvidiaAI.chat.completions.create({
-        model: 'nvidia/llama-3.1-nemotron-70b-instruct',
-        messages,
-        temperature: 0.7,
-        max_tokens: 2048,
-        stream: true
-      });
-
-      let fullText = '';
-      for await (const chunk of stream) {
-        const content = chunk.choices?.[0]?.delta?.content;
-        if (content) {
-          fullText += content;
-          sendEvent('token', { content });
-        }
+        return {
+          text: fullText.trim(),
+          model: currentModel
+        };
       }
 
-      if (fullText && fullText.trim().length > 0) {
-        console.log('[AI STREAM] NVIDIA streaming succeeded.');
-        return { text: fullText.trim(), model: 'nvidia' };
-      }
-    } catch (nErr) {
-      console.warn('[AI STREAM] NVIDIA streaming fallback failed:', nErr?.message || nErr);
+      throw new Error(
+        `${currentModel} returned empty stream`
+      );
+
+    } catch (error) {
+      lastError = error;
+
+      console.warn(
+        `[AI STREAM] 🥈 Gemini ${currentModel} failed:`,
+        error?.message || error
+      );
+
+      continue;
     }
   }
 
-  throw new Error('All configured AI models are currently unavailable.');
-}
+  // =========================================================
+  // ❌ ALL AI PROVIDERS FAILED
+  // =========================================================
 
-
-/**
- * ============================================================
- * WEB SEARCH (Non-streaming - used by both endpoints)
- * ============================================================
- */
-
-async function generateWebSearchResponse(query) {
-  console.log('[WEB SEARCH] Searching with Tavily:', query);
-
-  const searchResult = await tavilyClient.search(
-    query,
-    {
-      searchDepth: 'advanced',
-      maxResults: 5,
-      includeAnswer: true
-    }
-  );
-
-  if (!searchResult) {
-    throw new Error('Tavily returned no result.');
-  }
-
-  const results = searchResult.results || [];
-
-  if (results.length === 0) {
-    throw new Error('Tavily returned no search results.');
-  }
-
-  const sourceLinks = results.map((item, index) => ({
-    number: index + 1,
-    title: item.title,
-    url: item.url
-  }));
-
-  const researchText = results
-    .map((item, index) =>
-      `SOURCE ${index + 1}
-Title: ${item.title}
-URL: ${item.url}
-Content: ${item.content || ''}`
+  throw (
+    lastError ||
+    new Error(
+      'All configured AI models are currently unavailable.'
     )
-    .join('\n\n');
-
-  const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
-
-  if (!geminiApiKey) {
-    throw new Error('GEMINI_API_KEY is not configured.');
-  }
-
-  const genAI = new GoogleGenerativeAI(geminiApiKey);
-
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-3.5-flash',
-    systemInstruction: AEGIS_SYSTEM_INSTRUCTION
-  });
-
-  const prompt = `
-You are Aegis AI.
-
-The user asked:
-"${query}"
-
-Use the following fresh web-search results from Tavily:
-
-${researchText}
-
-Give the user a clean, accurate answer based ONLY on the useful information from these search results.
-
-Rules:
-
-- Do NOT copy raw webpage navigation text.
-- Do NOT include things like "Edition", "IN", "US", "GCC", language menus, Sign In, Subscribe, Trending Topics, etc.
-- Do NOT dump the complete search results.
-- Summarize the important information.
-- If this is a news question, give the most important recent stories first.
-- Use clear headings and bullet points where useful.
-- Mention uncertainty when the sources disagree or information is incomplete.
-- Do not invent facts.
-
-IMPORTANT LANGUAGE RULE:
-
-Respond in the SAME language and writing style as the user's query.
-
-- English query -> English response.
-- Hindi query -> Hindi response.
-- Marathi query -> Marathi response.
-- Hindi written in English letters -> natural Hinglish.
-- Marathi written in English letters -> natural Marathi using English letters.
-- Mixed Hindi/English -> preserve the same natural mixture.
-- Mixed Marathi/English -> preserve the same natural mixture.
-
-Do NOT automatically translate the answer into English.
-`;
-
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  const text = response.text();
-
-  if (!text || text.trim().length === 0) {
-    throw new Error('Gemini returned an empty answer.');
-  }
-
-  console.log('[WEB SEARCH] Tavily + Gemini completed.');
-
-  return {
-    text: text.trim(),
-    sources: sourceLinks
-  };
+  );
 }
 
 // ============================================================
