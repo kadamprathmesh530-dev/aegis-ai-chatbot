@@ -1006,6 +1006,78 @@ Your message has been securely processed and your conversation is saved to your 
 If you want, ask me a question and I'll help you.`;
 }
 
+// ============================================================
+// IMAGE ANALYSIS — GEMINI VISION
+// ============================================================
+
+async function generateVisionResponse(
+  imageData,
+  imageMimeType,
+  userPrompt
+) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured.');
+  }
+
+  if (!imageData) {
+    throw new Error('Image data is required.');
+  }
+
+  const cleanMimeType =
+    imageMimeType && imageMimeType.startsWith('image/')
+      ? imageMimeType
+      : 'image/jpeg';
+
+  // Remove data URL prefix if the mobile app sends:
+  // data:image/jpeg;base64,AAAA...
+  const base64Data = imageData.includes(',')
+    ? imageData.split(',')[1]
+    : imageData;
+
+  console.log(
+    '[VISION] 👁️ Analyzing image with Gemini Vision...'
+  );
+
+  const response = await webAI.models.generateContent({
+    model: 'gemini-3.7-flash',
+
+    contents: [
+      {
+        inlineData: {
+          mimeType: cleanMimeType,
+          data: base64Data
+        }
+      },
+      {
+        text:
+          userPrompt ||
+          'Analyze this image and explain what you can see clearly.'
+      }
+    ],
+
+    config: {
+      systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+    }
+  });
+
+  const text =
+    response.text ||
+    response.candidates?.[0]?.content?.parts
+      ?.map(part => part.text || '')
+      .join('');
+
+  if (!text || text.trim().length === 0) {
+    throw new Error(
+      'Gemini Vision returned an empty response.'
+    );
+  }
+
+  console.log(
+    '[VISION] 👁️ Gemini Vision analysis succeeded.'
+  );
+
+  return text.trim();
+}
 
 /**
  * ============================================================
@@ -1396,26 +1468,32 @@ async function streamWithRetry(
 router.post('/', async (req, res) => {
   try {
     let {
-      conversationId,
-      message
-    } = req.body;
+  conversationId,
+  message,
+  imageData,
+  imageMimeType
+} = req.body;
 
     // ========================================================
     // 1. VALIDATE MESSAGE
     // ========================================================
 
     if (
-      !message ||
-      typeof message !== 'string' ||
-      message.trim().length === 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        error: 'Message content is required.'
-      });
-    }
+  (!message ||
+    typeof message !== 'string' ||
+    message.trim().length === 0) &&
+  !imageData
+) {
+  return res.status(400).json({
+    success: false,
+    error: 'Message or image is required.'
+  });
+}
 
-    const cleanMessage = message.trim();
+    const cleanMessage =
+  typeof message === 'string'
+    ? message.trim()
+    : 'Please analyze this image.';
     let webSources = [];
 
     // ========================================================
@@ -1525,14 +1603,35 @@ router.post('/', async (req, res) => {
           // NORMAL AI RESPONSE
           // ==================================================
 
-          const result = await generateWithRetry(
-            genAI,
-            'gemini-3.5-flash',
-            historyForGemini,
-            cleanMessage
-          );
+          // ========================================================
+// IMAGE ANALYSIS
+// ========================================================
 
-          assistantResponseText = result.text;
+if (imageData) {
+  console.log(
+    '[VISION] 📸 Image received. Starting image analysis...'
+  );
+
+  assistantResponseText =
+    await generateVisionResponse(
+      imageData,
+      imageMimeType,
+      cleanMessage
+    );
+} else {
+  // ======================================================
+  // NORMAL AI RESPONSE
+  // ======================================================
+
+  const result = await generateWithRetry(
+    genAI,
+    'gemini-3.5-flash',
+    historyForGemini,
+    cleanMessage
+  );
+
+  assistantResponseText = result.text;
+}
         }
 
         // ====================================================
@@ -1658,15 +1757,32 @@ router.post('/stream', async (req, res) => {
   };
 
   try {
-    let { conversationId, message } = req.body;
+    let {
+  conversationId,
+  message,
+  imageData,
+  imageMimeType
+} = req.body;
 
     // 1. VALIDATE MESSAGE
-    if (!message || typeof message !== 'string' || message.trim().length === 0) {
-      sendError('Message content is required.', false);
-      return res.end();
-    }
+    if (
+  (!message ||
+    typeof message !== 'string' ||
+    message.trim().length === 0) &&
+  !imageData
+) {
+  sendError(
+    'Message or image is required.',
+    false
+  );
 
-    const cleanMessage = message.trim();
+  return res.end();
+}
+
+    const cleanMessage =
+  typeof message === 'string'
+    ? message.trim()
+    : 'Please analyze this image.';
     let webSources = [];
     let isNewConversation = false;
 
@@ -1736,7 +1852,59 @@ router.post('/stream', async (req, res) => {
         // Send assistant_start event before streaming begins
         sendEvent('assistant_start', { conversationId });
 
-        if (needsWebSearch) {
+        if (imageData) {
+  console.log('[IMAGE STREAM] 🖼️ Analyzing image...');
+
+  try {
+    const visionAI = new GoogleGenAI({
+      apiKey: geminiApiKey,
+    });
+
+    sendEvent('thinking', { status: 'analyzing_image' });
+
+    const visionResult = await visionAI.models.generateContent({
+      model: 'gemini-3.7-flash',
+      contents: [
+        {
+          inlineData: {
+            mimeType: imageMimeType || 'image/jpeg',
+            data: imageData,
+          },
+        },
+        {
+          text: cleanMessage,
+        },
+      ],
+      config: {
+        systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
+      },
+    });
+
+    assistantResponseText =
+      visionResult.text || 'I could not analyze this image.';
+
+    const words = assistantResponseText.split(/(\s+)/);
+
+    for (const word of words) {
+      if (word) {
+        sendEvent('assistant_chunk', {
+          content: word,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+  } catch (visionError) {
+    console.error('[IMAGE STREAM] ❌ Vision error:', visionError);
+
+    sendError(
+      'I could not analyze this image right now.',
+      true
+    );
+
+    return res.end();
+  }
+} else if (needsWebSearch) {
           // Web search is non-streaming - send as complete response
           console.log('[WEB SEARCH STREAM] Using web search for:', cleanMessage);
           sendEvent('thinking', { status: 'searching' });
