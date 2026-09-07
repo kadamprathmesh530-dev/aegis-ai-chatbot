@@ -1,5 +1,11 @@
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Speech from 'expo-speech';
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from 'expo-speech-recognition';
 import React, { useEffect, useRef, useState } from 'react';
 
 import {
@@ -7,6 +13,7 @@ import {
   Alert,
   Animated,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -41,6 +48,55 @@ type Conversation = {
   title: string;
   updated_at?: string;
 };
+
+type AIMode =
+  | 'General'
+  | 'Study'
+  | 'Coding'
+  | 'Creative'
+  | 'Explain';
+
+const AI_MODES = [
+  {
+    key: 'General' as AIMode,
+    icon: '🤖',
+    title: 'General',
+    subtitle: 'Balanced assistant',
+    instruction: 'Answer normally as a helpful, accurate AI assistant.',
+  },
+  {
+    key: 'Study' as AIMode,
+    icon: '📚',
+    title: 'Study',
+    subtitle: 'Learn step-by-step',
+    instruction:
+      'Act as a patient study tutor. Explain concepts step-by-step, use simple language, examples, and exam-ready points when useful.',
+  },
+  {
+    key: 'Coding' as AIMode,
+    icon: '💻',
+    title: 'Coding',
+    subtitle: 'Developer mode',
+    instruction:
+      'Act as an expert programming assistant. Give practical, correct code and explain important parts clearly.',
+  },
+  {
+    key: 'Creative' as AIMode,
+    icon: '✨',
+    title: 'Creative',
+    subtitle: 'Ideas & writing',
+    instruction:
+      'Act as a creative assistant. Generate original, polished ideas and writing matching the requested tone and format.',
+  },
+  {
+    key: 'Explain' as AIMode,
+    icon: '🧠',
+    title: 'Explain',
+    subtitle: 'Simple explanations',
+    instruction:
+      'Explain the answer as simply as possible for a beginner, using examples and avoiding unnecessary jargon.',
+  },
+];
 
 export default function HomeScreen() {
   // ============================================================
@@ -83,6 +139,25 @@ export default function HomeScreen() {
   const [loading, setLoading] =
     useState(false);
 
+  // ============================================================
+  // VOICE INPUT
+  // ============================================================
+
+  const [isListening, setIsListening] =
+    useState(false);
+
+  // ============================================================
+  // AEGIS AUTO WAKE / VOICE MODE
+  // ============================================================
+
+  const voiceAutoModeRef = useRef(false);
+  const wakeWordListeningRef = useRef(false);
+  const voiceCommandModeRef = useRef(false);
+  const voiceCommandTextRef = useRef('');
+  const voiceCommandInProgressRef = useRef(false);
+  const waitingForWelcomeRef = useRef(false);
+  const wakeRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [selectedImage, setSelectedImage] =
     useState<string | null>(null);
 
@@ -103,6 +178,22 @@ export default function HomeScreen() {
   const [showProfileMenu, setShowProfileMenu] =
     useState(false);
 
+  const [showProfile, setShowProfile] =
+    useState(false);
+
+  const [profileData, setProfileData] =
+    useState<any>(null);
+
+  const [profileLoading, setProfileLoading] =
+    useState(false);
+
+  // ============================================================
+  // IMAGE OPTIONS MENU
+  // ============================================================
+
+  const [showImageOptionsModal, setShowImageOptionsModal] =
+    useState(false);
+
   // ============================================================
   // FEEDBACK
   // ============================================================
@@ -113,6 +204,13 @@ export default function HomeScreen() {
       | 'dislike'
       | null;
   }>({});
+
+  // ============================================================
+  // AI MODES
+  // ============================================================
+
+  const [aiMode, setAiMode] = useState<AIMode>('General');
+  const [showAIModeModal, setShowAIModeModal] = useState(false);
 
   // ============================================================
   // SCROLL
@@ -240,6 +338,72 @@ export default function HomeScreen() {
   };
 
   // ============================================================
+  // LOAD PROFILE
+  // ============================================================
+
+  const loadProfile = async () => {
+    try {
+      setProfileLoading(true);
+
+      const token = await AsyncStorage.getItem(
+        'aegis_auth_token'
+      );
+
+      if (!token) {
+        setLoggedIn(false);
+        return;
+      }
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/auth/me`,
+        {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.status === 401) {
+        await AsyncStorage.removeItem('aegis_auth_token');
+        await AsyncStorage.removeItem('aegis_auth_user');
+        setLoggedIn(false);
+        setShowProfile(false);
+        return;
+      }
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          data?.error || 'Failed to load profile.'
+        );
+      }
+
+      setProfileData(data.user);
+      setUsername(data.user?.username || 'User');
+    } catch (error) {
+      console.error('Profile loading error:', error);
+      Alert.alert(
+        'Profile Error',
+        'Could not load your profile. Please try again.'
+      );
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  // ============================================================
+  // OPEN PROFILE
+  // ============================================================
+
+  const openProfile = async () => {
+    setShowProfileMenu(false);
+    setShowProfile(true);
+    await loadProfile();
+  };
+
+  // ============================================================
   // LOGIN SUCCESS
   // ============================================================
 
@@ -344,11 +508,13 @@ export default function HomeScreen() {
       setConversationId(null);
 
       setMessage('');
-      setSelectedImage(null);
+      clearSelectedImage();
 
       setShowHistory(false);
 
       setShowProfileMenu(false);
+      setShowProfile(false);
+      setProfileData(null);
 
       setShowChangePassword(false);
 
@@ -373,7 +539,7 @@ export default function HomeScreen() {
     setMessages([]);
 
     setMessage('');
-    setSelectedImage(null);
+    clearSelectedImage();
 
     setFeedback({});
 
@@ -503,7 +669,7 @@ export default function HomeScreen() {
       );
 
       setMessage('');
-      setSelectedImage(null);
+      clearSelectedImage();
 
       setFeedback({});
 
@@ -535,62 +701,564 @@ export default function HomeScreen() {
   };
 
   // ============================================================
-  // IMAGE PICKER
+  // AEGIS AUTO WAKE / VOICE
   // ============================================================
-const [selectedImageBase64, setSelectedImageBase64] =
-  useState<string | null>(null);
 
-const [selectedImageMimeType, setSelectedImageMimeType] =
-  useState<string>('image/jpeg');
+  const clearWakeRestartTimer = () => {
+    if (wakeRestartTimerRef.current) {
+      clearTimeout(wakeRestartTimerRef.current);
+      wakeRestartTimerRef.current = null;
+    }
+  };
 
-  const pickImage = async () => {
-  try {
-    const permissionResult =
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
+  const stopAegisVoiceMode = () => {
+    clearWakeRestartTimer();
+    wakeWordListeningRef.current = false;
+    voiceCommandModeRef.current = false;
+    voiceCommandTextRef.current = '';
+    voiceCommandInProgressRef.current = false;
+    waitingForWelcomeRef.current = false;
+    voiceAutoModeRef.current = false;
 
-    if (!permissionResult.granted) {
-      Alert.alert(
-        'Permission Required',
-        'Please allow gallery access to select an image.'
-      );
+    try {
+      ExpoSpeechRecognitionModule.stop();
+    } catch (error) {
+      console.error('Aegis voice stop error:', error);
+    }
+  };
+
+  const startWakeWordListening = async () => {
+    try {
+      if (!loggedIn || loading || !voiceAutoModeRef.current) return;
+      if (voiceCommandModeRef.current) return;
+
+      clearWakeRestartTimer();
+      wakeWordListeningRef.current = true;
+
+      ExpoSpeechRecognitionModule.start({
+        lang: 'en-IN',
+        interimResults: true,
+        continuous: false,
+      });
+    } catch (error) {
+      console.error('Aegis wake listening error:', error);
+      wakeWordListeningRef.current = false;
+      wakeRestartTimerRef.current = setTimeout(() => {
+        startWakeWordListening();
+      }, 1200);
+    }
+  };
+
+  const activateAegis = () => {
+    if (!voiceAutoModeRef.current || voiceCommandModeRef.current) return;
+
+    clearWakeRestartTimer();
+    wakeWordListeningRef.current = false;
+    voiceCommandModeRef.current = true;
+    voiceCommandTextRef.current = '';
+    waitingForWelcomeRef.current = true;
+
+    try {
+      ExpoSpeechRecognitionModule.stop();
+    } catch (error) {
+      console.error('Wake word stop error:', error);
+    }
+
+    Speech.stop();
+    Speech.speak('Welcome Back Captain', {
+      rate: 0.95,
+      pitch: 1.0,
+      onDone: () => {
+        waitingForWelcomeRef.current = false;
+        setTimeout(() => {
+          if (!voiceAutoModeRef.current || !loggedIn || loading) return;
+
+          try {
+            ExpoSpeechRecognitionModule.start({
+              lang: 'en-IN',
+              interimResults: true,
+              continuous: false,
+            });
+          } catch (error) {
+            console.error('Aegis command listening error:', error);
+          }
+        }, 250);
+      },
+    });
+  };
+
+  const enableAegisAutoVoice = async () => {
+    try {
+      const permission =
+        await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert(
+          'Microphone Permission',
+          'Please allow microphone and speech recognition permission to use Hey Aegis.'
+        );
+        return;
+      }
+
+      voiceAutoModeRef.current = true;
+      startWakeWordListening();
+    } catch (error) {
+      console.error('Aegis auto voice error:', error);
+    }
+  };
+
+  // Automatically start Hey Aegis mode while the chat screen is open.
+  useEffect(() => {
+    if (
+      !loggedIn ||
+      showHistory ||
+      showProfile ||
+      showChangePassword
+    ) {
+      stopAegisVoiceMode();
       return;
     }
 
-    const result =
-      await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 0.8,
-        base64: true,
+    // Hey Aegis auto wake is temporarily disabled.
+    // Voice can still be started manually with the microphone button.
+
+    return () => {
+      stopAegisVoiceMode();
+    };
+  }, [
+    loggedIn,
+    showHistory,
+    showProfile,
+    showChangePassword,
+  ]);
+
+  // ============================================================
+  // VOICE INPUT EVENTS
+  // ============================================================
+
+  useSpeechRecognitionEvent('start', () => {
+    setIsListening(true);
+  });
+
+  useSpeechRecognitionEvent('end', () => {
+    setIsListening(false);
+
+    // The wake-word recognition is intentionally stopped while
+    // Aegis says "Welcome Back Captain". Wait for TTS to finish.
+    if (waitingForWelcomeRef.current) {
+      return;
+    }
+
+    if (
+      voiceAutoModeRef.current &&
+      wakeWordListeningRef.current &&
+      !voiceCommandModeRef.current
+    ) {
+      wakeWordListeningRef.current = false;
+      wakeRestartTimerRef.current = setTimeout(() => {
+        startWakeWordListening();
+      }, 250);
+      return;
+    }
+
+    if (
+      voiceAutoModeRef.current &&
+      voiceCommandModeRef.current &&
+      !voiceCommandInProgressRef.current
+    ) {
+      const command = voiceCommandTextRef.current.trim();
+
+      if (command) {
+        voiceCommandInProgressRef.current = true;
+        voiceCommandModeRef.current = false;
+        voiceCommandTextRef.current = '';
+        sendMessage(command, true);
+      } else {
+        voiceCommandModeRef.current = false;
+        startWakeWordListening();
+      }
+    }
+  });
+
+  useSpeechRecognitionEvent('result', (event) => {
+    const transcript = event.results?.[0]?.transcript || '';
+    if (!transcript) return;
+
+    const normalizedTranscript = transcript
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (
+      voiceAutoModeRef.current &&
+      wakeWordListeningRef.current &&
+      !voiceCommandModeRef.current
+    ) {
+      // Android speech recognition may hear "Hey Aegis" with
+      // slightly different spellings, for example:
+      // "hey aegis", "hey ages", "hey ajis", or "hey a jesus".
+      // Accept these common recognition variants so the wake word
+      // still activates.
+      const wakeWordVariants = [
+        'hey aegis',
+        'hey ages',
+        'hey ajis',
+        'hey a jesus',
+        'hey a jes',
+        'hey egis',
+        'aegis',
+        'ages',
+        'ajis',
+        'egis',
+      ];
+
+      const wakeWordDetected = wakeWordVariants.some((variant) =>
+        normalizedTranscript === variant ||
+        normalizedTranscript.startsWith(`${variant} `) ||
+        normalizedTranscript.includes(` ${variant} `) ||
+        normalizedTranscript.endsWith(` ${variant}`)
+      );
+
+      if (wakeWordDetected) {
+        activateAegis();
+      }
+
+      return;
+    }
+
+    if (
+      voiceAutoModeRef.current &&
+      voiceCommandModeRef.current
+    ) {
+      voiceCommandTextRef.current = transcript;
+      setMessage(transcript);
+      return;
+    }
+
+    setMessage(transcript);
+  });
+
+  useSpeechRecognitionEvent('error', (event) => {
+    // "no-speech" is normal while Hey Aegis standby is waiting.
+    // Do not show it as a console error.
+    const errorCode = String(event.error || '').toLowerCase();
+
+    if (errorCode !== 'no-speech') {
+      console.error(
+        'Speech recognition error:',
+        event.error,
+        event.message
+      );
+    }
+
+    setIsListening(false);
+
+    if (voiceAutoModeRef.current && loggedIn) {
+      voiceCommandModeRef.current = false;
+      wakeWordListeningRef.current = false;
+
+      clearWakeRestartTimer();
+
+      wakeRestartTimerRef.current = setTimeout(() => {
+        startWakeWordListening();
+      }, errorCode === 'no-speech' ? 250 : 800);
+    }
+  });
+
+  const startVoiceInput = async () => {
+    try {
+      if (loading) return;
+
+      const permission =
+        await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert(
+          'Microphone Permission',
+          'Please allow microphone and speech recognition permission to use voice input.'
+        );
+        return;
+      }
+
+      // Manual voice button temporarily takes over from wake-word mode.
+      wakeWordListeningRef.current = false;
+      voiceCommandModeRef.current = false;
+      voiceCommandTextRef.current = '';
+      voiceAutoModeRef.current = false;
+
+      setIsListening(true);
+
+      ExpoSpeechRecognitionModule.start({
+        lang: 'en-IN',
+        interimResults: true,
+        continuous: false,
+      });
+    } catch (error) {
+      console.error('Voice start error:', error);
+      setIsListening(false);
+      Alert.alert(
+        'Voice Error',
+        'Could not start voice input. Please try again.'
+      );
+    }
+  };
+
+  const stopVoiceInput = () => {
+    // Completely stop voice mode. Do NOT automatically restart
+    // Hey Aegis after the user presses the stop button.
+    clearWakeRestartTimer();
+
+    voiceAutoModeRef.current = false;
+    wakeWordListeningRef.current = false;
+    voiceCommandModeRef.current = false;
+    voiceCommandTextRef.current = '';
+    voiceCommandInProgressRef.current = false;
+    waitingForWelcomeRef.current = false;
+
+    try {
+      ExpoSpeechRecognitionModule.stop();
+    } catch (error) {
+      console.error('Voice stop error:', error);
+    }
+
+    Speech.stop();
+    setIsListening(false);
+  };
+
+  // ============================================================
+  // IMAGE PICKER / CAMERA
+  // ============================================================
+  const [selectedImageBase64, setSelectedImageBase64] =
+    useState<string | null>(null);
+
+  const [selectedImageMimeType, setSelectedImageMimeType] =
+    useState<string>('image/jpeg');
+
+  const clearSelectedImage = () => {
+    setSelectedImage(null);
+    setSelectedImageBase64(null);
+    setSelectedImageMimeType('image/jpeg');
+  };
+
+  const pickImage = async () => {
+    try {
+      const permissionResult =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permissionResult.granted) {
+        Alert.alert(
+          'Permission Required',
+          'Please allow gallery access to select an image.'
+        );
+        return;
+      }
+
+      const result =
+        await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: false,
+          quality: 0.8,
+          base64: true,
+        });
+
+      if (!result.canceled && result.assets.length > 0) {
+        const asset = result.assets[0];
+
+        setSelectedImage(asset.uri);
+        setSelectedImageBase64(asset.base64 || null);
+        setSelectedImageMimeType(
+          asset.mimeType?.startsWith('image/')
+            ? asset.mimeType
+            : 'image/jpeg'
+        );
+      }
+    } catch (error) {
+      console.error('Image picker error:', error);
+
+      Alert.alert(
+        'Image Error',
+        'Could not select the image. Please try again.'
+      );
+    }
+  };
+
+  const takePhoto = async () => {
+    try {
+      const permissionResult =
+        await ImagePicker.requestCameraPermissionsAsync();
+
+      if (!permissionResult.granted) {
+        Alert.alert(
+          'Camera Permission Required',
+          'Please allow camera access to take a photo.'
+        );
+        return;
+      }
+
+      const result =
+        await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          allowsEditing: false,
+          quality: 0.8,
+          base64: true,
+        });
+
+      if (!result.canceled && result.assets.length > 0) {
+        const asset = result.assets[0];
+
+        setSelectedImage(asset.uri);
+        setSelectedImageBase64(asset.base64 || null);
+        setSelectedImageMimeType(
+          asset.mimeType?.startsWith('image/')
+            ? asset.mimeType
+            : 'image/jpeg'
+        );
+      }
+    } catch (error) {
+      console.error('Camera error:', error);
+
+      Alert.alert(
+        'Camera Error',
+        'Could not take the photo. Please try again.'
+      );
+    }
+  };
+
+  const showImageOptions = () => {
+    if (loading) return;
+
+    setShowImageOptionsModal(true);
+  };
+
+  const handleCameraPress = () => {
+    setShowImageOptionsModal(false);
+
+    setTimeout(() => {
+      takePhoto();
+    }, 150);
+  };
+
+  const handleGalleryPress = () => {
+    setShowImageOptionsModal(false);
+
+    setTimeout(() => {
+      pickImage();
+    }, 150);
+  };
+
+  const handleFilesPress = async () => {
+    setShowImageOptionsModal(false);
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'image/*',
+        copyToCacheDirectory: true,
+        multiple: false,
       });
 
-    if (!result.canceled && result.assets.length > 0) {
-      const asset = result.assets[0];
+      if (!result.canceled && result.assets?.length > 0) {
+        const asset = result.assets[0];
 
-      setSelectedImage(asset.uri);
-      setSelectedImageBase64(asset.base64 || null);
-      setSelectedImageMimeType('image/jpeg');
+        setSelectedImage(asset.uri);
+
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+
+        const reader = new FileReader();
+
+        reader.onloadend = () => {
+          const resultData = reader.result;
+
+          const base64 =
+            typeof resultData === 'string'
+              ? resultData.split(',')[1] || null
+              : null;
+
+          setSelectedImageBase64(base64);
+          setSelectedImageMimeType(
+            asset.mimeType?.startsWith('image/')
+              ? asset.mimeType
+              : 'image/jpeg'
+          );
+        };
+
+        reader.readAsDataURL(blob);
+      }
+    } catch (error) {
+      console.error('File picker error:', error);
+
+      Alert.alert(
+        'File Error',
+        'Could not select the image file. Please try again.'
+      );
     }
-  } catch (error) {
-    console.error('Image picker error:', error);
+  };
 
-    Alert.alert(
-      'Image Error',
-      'Could not select the image. Please try again.'
-    );
-  }
-};
+  // ============================================================
+  // AI MODE HELPERS
+  // ============================================================
+
+  const getSelectedMode = () =>
+    AI_MODES.find((mode) => mode.key === aiMode) || AI_MODES[0];
+
+  const selectAIMode = (mode: AIMode) => {
+    setAiMode(mode);
+    setShowAIModeModal(false);
+  };
+
+  const usePrompt = (prompt: string) => {
+    if (loading) return;
+    setMessage(prompt);
+  };
+
+  const exportCurrentChat = async () => {
+    if (messages.length === 0) {
+      Alert.alert('Nothing to Export', 'Start a conversation first.');
+      return;
+    }
+
+    try {
+      const exportText = [
+        'AegisAI Conversation',
+        `Mode: ${getSelectedMode().title}`,
+        '',
+        ...messages.map((item) =>
+          `${item.role === 'user' ? 'You' : 'AegisAI'}: ${item.content}`
+        ),
+      ].join('\\n\\n');
+
+      await Clipboard.setStringAsync(exportText);
+      Alert.alert(
+        'Chat Exported',
+        'The complete conversation has been copied to your clipboard.'
+      );
+    } catch (error) {
+      console.error('Export chat error:', error);
+      Alert.alert('Export Error', 'Could not export this conversation.');
+    }
+  };
 
   // ============================================================
   // SEND MESSAGE
   // ============================================================
 
- const sendMessage = async () => {
-  const cleanMessage = message.trim();
+ const sendMessage = async (voiceMessage?: string, fromAegisVoice = false) => {
+  const cleanMessage = (voiceMessage ?? message).trim();
 
   if ((!cleanMessage && !selectedImage) || loading) {
     return;
   }
+
+  const selectedMode = getSelectedMode();
+  const modeInstruction =
+    selectedMode.key === 'General'
+      ? ''
+      : `\\n\\n[Assistant Mode: ${selectedMode.title}]\\n${selectedMode.instruction}`;
+
+  const requestMessage = cleanMessage
+    ? `${cleanMessage}${modeInstruction}`
+    : '';
 
   const token = await AsyncStorage.getItem(
     'aegis_auth_token'
@@ -650,7 +1318,7 @@ if (selectedImageBase64) {
             conversationId,
 
           message:
-            cleanMessage ||
+            requestMessage ||
             'Please analyze this image.',
 
           imageData:
@@ -686,28 +1354,45 @@ if (selectedImageBase64) {
     // ASSISTANT RESPONSE
     // ==========================================================
 
-    if (
-      data.assistantMessage?.content
-    ) {
+    const assistantData =
+      data.assistantMessage || data.message;
+
+    if (assistantData?.content) {
       const assistantMessage: Message = {
         id:
-          data.assistantMessage.id ||
+          assistantData.id ||
           `${Date.now()}-assistant`,
 
         role: 'assistant',
 
         content:
-          data.assistantMessage.content,
+          assistantData.content,
       };
 
       setMessages((prev) => [
         ...prev,
         assistantMessage,
       ]);
+
+      // Speak the answer when the command came through Hey Aegis.
+      if (fromAegisVoice) {
+        Speech.stop();
+        Speech.speak(assistantData.content, {
+          rate: 0.95,
+          pitch: 1.0,
+          onDone: () => {
+            if (voiceAutoModeRef.current && loggedIn) {
+              wakeRestartTimerRef.current = setTimeout(() => {
+                startWakeWordListening();
+              }, 300);
+            }
+          },
+        });
+      }
     }
 
-    // Clear selected image
-    setSelectedImage(null);
+    // Clear selected image and its encoded data
+    clearSelectedImage();
 
   } catch (error) {
     console.error(
@@ -721,6 +1406,10 @@ if (selectedImageBase64) {
     );
   } finally {
     setLoading(false);
+
+    if (fromAegisVoice) {
+      voiceCommandInProgressRef.current = false;
+    }
   }
 };
 
@@ -779,6 +1468,229 @@ if (selectedImageBase64) {
           setShowRegister(true)
         }
       />
+    );
+  }
+
+  // ============================================================
+  // PROFILE SCREEN
+  // ============================================================
+
+  if (showProfile) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.profileScreenHeader}>
+          <Pressable
+            onPress={() => setShowProfile(false)}
+            style={({ pressed }) => [
+              styles.profileBackButton,
+              pressed && styles.profileBackButtonPressed,
+            ]}
+            hitSlop={8}
+          >
+            <Text style={styles.profileBackText}>‹</Text>
+          </Pressable>
+
+          <Text style={styles.profileScreenTitle}>
+            My Profile
+          </Text>
+        </View>
+
+        {profileLoading ? (
+          <View style={styles.profileLoading}>
+            <ActivityIndicator size="large" />
+            <Text style={styles.profileLoadingText}>
+              Loading profile...
+            </Text>
+          </View>
+        ) : profileData ? (
+          <ScrollView
+            style={styles.profileScroll}
+            contentContainerStyle={styles.profileContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.profileHero}>
+              {profileData.avatarUrl ? (
+                <Image
+                  source={{ uri: profileData.avatarUrl }}
+                  style={styles.profileAvatarImage}
+                />
+              ) : (
+                <View style={styles.profileAvatarLarge}>
+                  <Text style={styles.profileAvatarLargeText}>
+                    {(profileData.username || 'U')
+                      .substring(0, 1)
+                      .toUpperCase()}
+                  </Text>
+                </View>
+              )}
+
+              <Text style={styles.profileScreenUsername}>
+                {profileData.username || 'User'}
+              </Text>
+
+              <Text style={styles.profileScreenEmail}>
+                {profileData.email || '—'}
+              </Text>
+            </View>
+
+            <View style={styles.profileInfoCard}>
+              <Text style={styles.profileSectionTitle}>
+                Account Information
+              </Text>
+
+              <View style={styles.profileInfoRow}>
+                <Text style={styles.profileInfoLabel}>
+                  Username
+                </Text>
+                <Text
+                  style={styles.profileInfoValue}
+                  numberOfLines={1}
+                >
+                  {profileData.username || '—'}
+                </Text>
+              </View>
+
+              <View style={styles.profileInfoDivider} />
+
+              <View style={styles.profileInfoRow}>
+                <Text style={styles.profileInfoLabel}>
+                  Email
+                </Text>
+                <Text
+                  style={styles.profileInfoValue}
+                  numberOfLines={1}
+                >
+                  {profileData.email || '—'}
+                </Text>
+              </View>
+
+              <View style={styles.profileInfoDivider} />
+
+              <View style={styles.profileInfoRow}>
+                <Text style={styles.profileInfoLabel}>
+                  Login Method
+                </Text>
+                <View style={styles.profileMethodBadge}>
+                  <Text style={styles.profileMethodText}>
+                    {profileData.authProvider === 'google'
+                      ? 'Google'
+                      : 'Email & Password'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.profileInfoDivider} />
+
+              <View style={styles.profileInfoRow}>
+                <Text style={styles.profileInfoLabel}>
+                  Role
+                </Text>
+                <Text style={styles.profileInfoValue}>
+                  {profileData.role === 'admin'
+                    ? 'Administrator'
+                    : 'User'}
+                </Text>
+              </View>
+
+              <View style={styles.profileInfoDivider} />
+
+              <View style={styles.profileInfoRow}>
+                <Text style={styles.profileInfoLabel}>
+                  Joined
+                </Text>
+                <Text style={styles.profileInfoValue}>
+                  {profileData.createdAt
+                    ? new Date(
+                        profileData.createdAt
+                      ).toLocaleDateString()
+                    : '—'}
+                </Text>
+              </View>
+
+              <View style={styles.profileInfoDivider} />
+
+              <View style={styles.profileInfoRow}>
+                <Text style={styles.profileInfoLabel}>
+                  Last Login
+                </Text>
+                <Text
+                  style={styles.profileInfoValue}
+                  numberOfLines={2}
+                >
+                  {profileData.lastLoginAt
+                    ? new Date(
+                        profileData.lastLoginAt
+                      ).toLocaleString()
+                    : '—'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.profileInfoCard}>
+              <Text style={styles.profileSectionTitle}>
+                About AegisAI
+              </Text>
+
+              <Text style={styles.profileAboutText}>
+                AegisAI is your intelligent AI assistant, built
+                to help you learn, create, solve problems,
+                analyze images, search the web, and get things
+                done faster.
+              </Text>
+
+              <View style={styles.profileAboutBrand}>
+                <Image
+                  source={require('../../assets/images/aegisai-logo.png')}
+                  style={styles.profileAboutLogo}
+                  resizeMode="contain"
+                />
+                <View>
+                  <Text style={styles.profileAboutBrandTitle}>
+                    AegisAI
+                  </Text>
+                  <Text style={styles.profileAboutBrandSubtitle}>
+                    Your AI Assistant
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            <Pressable
+              onPress={() => {
+                setShowProfile(false);
+                setShowChangePassword(true);
+              }}
+              style={({ pressed }) => [
+                styles.profileActionButton,
+                pressed && styles.profileActionButtonPressed,
+              ]}
+            >
+              <Text style={styles.profileActionText}>
+                🔑  Change Password
+              </Text>
+              <Text style={styles.profileActionArrow}>
+                ›
+              </Text>
+            </Pressable>
+
+            <View style={styles.profileBottomSpace} />
+          </ScrollView>
+        ) : (
+          <View style={styles.profileLoading}>
+            <Text style={styles.profileLoadingText}>
+              Could not load profile.
+            </Text>
+            <Pressable
+              onPress={loadProfile}
+              style={styles.profileRetryButton}
+            >
+              <Text style={styles.profileRetryText}>
+                Try Again
+              </Text>
+            </Pressable>
+          </View>
+        )}
+      </SafeAreaView>
     );
   }
 
@@ -948,6 +1860,116 @@ if (selectedImageBase64) {
       </View>
 
       {/* ======================================================
+          ACTIVE AI MODE BAR
+      ====================================================== */}
+
+      <View style={styles.aiModeBar}>
+        <Pressable
+          onPress={() => setShowAIModeModal(true)}
+          disabled={loading}
+          style={({ pressed }) => [
+            styles.aiModePill,
+            pressed && styles.aiModePillPressed,
+          ]}
+        >
+          <Text style={styles.aiModePillIcon}>
+            {getSelectedMode().icon}
+          </Text>
+          <View style={styles.aiModePillTextWrap}>
+            <Text style={styles.aiModePillLabel}>
+              {getSelectedMode().title} Mode
+            </Text>
+            <Text style={styles.aiModePillHint}>Tap to change</Text>
+          </View>
+          <Text style={styles.aiModePillArrow}>⌄</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={exportCurrentChat}
+          disabled={loading || messages.length === 0}
+          style={({ pressed }) => [
+            styles.exportChatButton,
+            (loading || messages.length === 0) &&
+              styles.exportChatButtonDisabled,
+            pressed && styles.exportChatButtonPressed,
+          ]}
+        >
+          <Text style={styles.exportChatText}>⇧ Export</Text>
+        </Pressable>
+      </View>
+
+      {/* ======================================================
+          AI MODE MENU
+      ====================================================== */}
+
+      <Modal
+        visible={showAIModeModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAIModeModal(false)}
+      >
+        <View style={styles.aiModeModalContainer}>
+          <Pressable
+            style={styles.aiModeModalBackdrop}
+            onPress={() => setShowAIModeModal(false)}
+          />
+
+          <View style={styles.aiModeSheet}>
+            <View style={styles.aiModeSheetHandle} />
+
+            <Text style={styles.aiModeSheetTitle}>
+              Choose AegisAI Mode
+            </Text>
+
+            <Text style={styles.aiModeSheetSubtitle}>
+              Change how Aegis responds to your next messages.
+            </Text>
+
+            {AI_MODES.map((mode) => (
+              <Pressable
+                key={mode.key}
+                onPress={() => selectAIMode(mode.key)}
+                style={({ pressed }) => [
+                  styles.aiModeOption,
+                  aiMode === mode.key && styles.aiModeOptionSelected,
+                  pressed && styles.aiModeOptionPressed,
+                ]}
+              >
+                <View style={styles.aiModeOptionIcon}>
+                  <Text style={styles.aiModeOptionEmoji}>
+                    {mode.icon}
+                  </Text>
+                </View>
+
+                <View style={styles.aiModeOptionText}>
+                  <Text style={styles.aiModeOptionTitle}>
+                    {mode.title}
+                  </Text>
+                  <Text style={styles.aiModeOptionSubtitle}>
+                    {mode.subtitle}
+                  </Text>
+                </View>
+
+                {aiMode === mode.key && (
+                  <Text style={styles.aiModeCheck}>✓</Text>
+                )}
+              </Pressable>
+            ))}
+
+            <Pressable
+              onPress={() => setShowAIModeModal(false)}
+              style={({ pressed }) => [
+                styles.aiModeCancelButton,
+                pressed && styles.aiModeCancelPressed,
+              ]}
+            >
+              <Text style={styles.aiModeCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ======================================================
           PROFILE MENU
       ====================================================== */}
 
@@ -970,6 +1992,25 @@ if (selectedImageBase64) {
               styles.profileMenuDivider
             }
           />
+
+          {/* VIEW PROFILE */}
+
+          <Pressable
+            onPress={openProfile}
+            style={({ pressed }) => [
+              styles.profileMenuButton,
+              pressed &&
+                styles.profileMenuButtonPressed,
+            ]}
+          >
+            <Text
+              style={
+                styles.profileMenuButtonText
+              }
+            >
+              👤  View Profile
+            </Text>
+          </Pressable>
 
           {/* CHANGE PASSWORD */}
 
@@ -1098,6 +2139,44 @@ if (selectedImageBase64) {
               >
                 How can I help you?
               </Text>
+
+              <View style={styles.promptGrid}>
+                {[
+                  {
+                    icon: '📚',
+                    title: 'Study this',
+                    prompt: 'Teach me this topic step-by-step with examples.',
+                  },
+                  {
+                    icon: '💻',
+                    title: 'Write code',
+                    prompt: 'Help me write clean, working code for my idea.',
+                  },
+                  {
+                    icon: '🧠',
+                    title: 'Explain simply',
+                    prompt: 'Explain a difficult concept in very simple language.',
+                  },
+                  {
+                    icon: '✨',
+                    title: 'Give ideas',
+                    prompt: 'Give me some creative ideas for my project.',
+                  },
+                ].map((item) => (
+                  <Pressable
+                    key={item.title}
+                    onPress={() => usePrompt(item.prompt)}
+                    disabled={loading}
+                    style={({ pressed }) => [
+                      styles.promptChip,
+                      pressed && styles.promptChipPressed,
+                    ]}
+                  >
+                    <Text style={styles.promptChipIcon}>{item.icon}</Text>
+                    <Text style={styles.promptChipText}>{item.title}</Text>
+                  </Pressable>
+                ))}
+              </View>
             </View>
           )}
 
@@ -1354,7 +2433,7 @@ if (selectedImageBase64) {
               />
 
               <Pressable
-                onPress={() => setSelectedImage(null)}
+                onPress={clearSelectedImage}
                 style={styles.removeImageButton}
                 hitSlop={8}
               >
@@ -1371,7 +2450,7 @@ if (selectedImageBase64) {
             style={styles.inputBox}
           >
             <Pressable
-              onPress={pickImage}
+              onPress={showImageOptions}
               disabled={loading}
               style={styles.attachButton}
               hitSlop={6}
@@ -1380,6 +2459,27 @@ if (selectedImageBase64) {
                 style={styles.attachText}
               >
                 📎
+              </Text>
+            </Pressable>
+
+            {/* VOICE INPUT BUTTON */}
+
+            <Pressable
+              onPress={
+                isListening
+                  ? stopVoiceInput
+                  : startVoiceInput
+              }
+              disabled={loading}
+              style={[
+                styles.voiceButton,
+                isListening &&
+                  styles.voiceButtonActive,
+              ]}
+              hitSlop={6}
+            >
+              <Text style={styles.voiceText}>
+                {isListening ? '⏹' : '🎙️'}
               </Text>
             </Pressable>
 
@@ -1412,14 +2512,11 @@ if (selectedImageBase64) {
             {/* SEND BUTTON */}
 
             <Pressable
-              onPress={
-                sendMessage
-              }
-
-              disabled={
-  (!message.trim() && !selectedImage) ||
-  loading
-}
+  onPress={() => sendMessage()}
+  disabled={
+    (!message.trim() && !selectedImage) ||
+    loading
+  }
 
               style={[
   styles.sendButton,
@@ -1454,6 +2551,139 @@ if (selectedImageBase64) {
             important information.
           </Text>
         </View>
+        {/* ======================================================
+            IMAGE OPTIONS MODAL
+        ====================================================== */}
+
+        <Modal
+          visible={showImageOptionsModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() =>
+            setShowImageOptionsModal(false)
+          }
+        >
+          <View style={styles.imageModalContainer}>
+            <Pressable
+              style={styles.imageModalBackdrop}
+              onPress={() =>
+                setShowImageOptionsModal(false)
+              }
+            />
+
+            <View style={styles.imageOptionsSheet}>
+              <View style={styles.imageSheetHandle} />
+
+              <Text style={styles.imageSheetTitle}>
+                Add Image
+              </Text>
+
+              <Text style={styles.imageSheetSubtitle}>
+                Choose how you want to add an image
+              </Text>
+
+              {/* CAMERA */}
+              <Pressable
+                onPress={handleCameraPress}
+                style={({ pressed }) => [
+                  styles.imageOption,
+                  pressed && styles.imageOptionPressed,
+                ]}
+              >
+                <View style={styles.imageOptionIcon}>
+                  <Text style={styles.imageOptionEmoji}>
+                    📷
+                  </Text>
+                </View>
+
+                <View style={styles.imageOptionTextContainer}>
+                  <Text style={styles.imageOptionTitle}>
+                    Camera
+                  </Text>
+                  <Text style={styles.imageOptionSubtitle}>
+                    Take a new photo
+                  </Text>
+                </View>
+
+                <Text style={styles.imageOptionArrow}>
+                  ›
+                </Text>
+              </Pressable>
+
+              {/* PHOTOS */}
+              <Pressable
+                onPress={handleGalleryPress}
+                style={({ pressed }) => [
+                  styles.imageOption,
+                  pressed && styles.imageOptionPressed,
+                ]}
+              >
+                <View style={styles.imageOptionIcon}>
+                  <Text style={styles.imageOptionEmoji}>
+                    🖼️
+                  </Text>
+                </View>
+
+                <View style={styles.imageOptionTextContainer}>
+                  <Text style={styles.imageOptionTitle}>
+                    Photos
+                  </Text>
+                  <Text style={styles.imageOptionSubtitle}>
+                    Choose from your gallery
+                  </Text>
+                </View>
+
+                <Text style={styles.imageOptionArrow}>
+                  ›
+                </Text>
+              </Pressable>
+
+              {/* FILES */}
+              <Pressable
+                onPress={handleFilesPress}
+                style={({ pressed }) => [
+                  styles.imageOption,
+                  pressed && styles.imageOptionPressed,
+                ]}
+              >
+                <View style={styles.imageOptionIcon}>
+                  <Text style={styles.imageOptionEmoji}>
+                    📎
+                  </Text>
+                </View>
+
+                <View style={styles.imageOptionTextContainer}>
+                  <Text style={styles.imageOptionTitle}>
+                    Files
+                  </Text>
+                  <Text style={styles.imageOptionSubtitle}>
+                    Select an image file
+                  </Text>
+                </View>
+
+                <Text style={styles.imageOptionArrow}>
+                  ›
+                </Text>
+              </Pressable>
+
+              {/* CANCEL */}
+              <Pressable
+                onPress={() =>
+                  setShowImageOptionsModal(false)
+                }
+                style={({ pressed }) => [
+                  styles.imageCancelButton,
+                  pressed && styles.imageCancelButtonPressed,
+                ]}
+              >
+                <Text style={styles.imageCancelText}>
+                  Cancel
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -1633,6 +2863,259 @@ const styles =
       color: '#ffffff',
       fontSize: 14,
       fontWeight: '600',
+    },
+
+    // ==========================================================
+    // PROFILE SCREEN
+    // ==========================================================
+
+    profileScreenHeader: {
+      height: 70,
+      paddingHorizontal: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderBottomWidth: 1,
+      borderBottomColor: '#1e1e25',
+    },
+
+    profileBackButton: {
+      width: 42,
+      height: 42,
+      borderRadius: 12,
+      backgroundColor: '#19191f',
+      borderWidth: 1,
+      borderColor: '#292932',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    profileBackButtonPressed: {
+      opacity: 0.65,
+    },
+
+    profileBackText: {
+      color: '#ffffff',
+      fontSize: 34,
+      lineHeight: 36,
+      fontWeight: '300',
+      marginTop: -3,
+    },
+
+    profileScreenTitle: {
+      color: '#ffffff',
+      fontSize: 21,
+      fontWeight: '800',
+      marginLeft: 12,
+    },
+
+    profileLoading: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 24,
+    },
+
+    profileLoadingText: {
+      color: '#9999a3',
+      fontSize: 14,
+      marginTop: 12,
+      textAlign: 'center',
+    },
+
+    profileScroll: {
+      flex: 1,
+    },
+
+    profileContent: {
+      paddingHorizontal: 18,
+      paddingTop: 22,
+    },
+
+    profileHero: {
+      alignItems: 'center',
+      paddingBottom: 6,
+    },
+
+    profileAvatarLarge: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      backgroundColor: '#25252d',
+      borderWidth: 1,
+      borderColor: '#3a3a45',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    profileAvatarLargeText: {
+      color: '#ffffff',
+      fontSize: 38,
+      fontWeight: '800',
+    },
+
+    profileAvatarImage: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      borderWidth: 1,
+      borderColor: '#3a3a45',
+    },
+
+    profileScreenUsername: {
+      color: '#ffffff',
+      fontSize: 25,
+      fontWeight: '800',
+      marginTop: 14,
+      textAlign: 'center',
+    },
+
+    profileScreenEmail: {
+      color: '#858590',
+      fontSize: 14,
+      marginTop: 5,
+      textAlign: 'center',
+    },
+
+    profileInfoCard: {
+      backgroundColor: '#15151b',
+      borderWidth: 1,
+      borderColor: '#24242c',
+      borderRadius: 18,
+      paddingHorizontal: 16,
+      paddingVertical: 16,
+      marginTop: 20,
+    },
+
+    profileSectionTitle: {
+      color: '#ffffff',
+      fontSize: 17,
+      fontWeight: '800',
+      marginBottom: 5,
+    },
+
+    profileInfoRow: {
+      minHeight: 46,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+
+    profileInfoLabel: {
+      color: '#858590',
+      fontSize: 13,
+      flex: 1,
+    },
+
+    profileInfoValue: {
+      color: '#ffffff',
+      fontSize: 13,
+      fontWeight: '600',
+      textAlign: 'right',
+      flex: 1.6,
+    },
+
+    profileInfoDivider: {
+      height: 1,
+      backgroundColor: '#24242c',
+    },
+
+    profileMethodBadge: {
+      backgroundColor: '#202027',
+      borderWidth: 1,
+      borderColor: '#30303a',
+      borderRadius: 10,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+    },
+
+    profileMethodText: {
+      color: '#ffffff',
+      fontSize: 12,
+      fontWeight: '700',
+    },
+
+    profileAboutText: {
+      color: '#9999a3',
+      fontSize: 14,
+      lineHeight: 22,
+      marginTop: 8,
+    },
+
+    profileAboutBrand: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 18,
+      paddingTop: 15,
+      borderTopWidth: 1,
+      borderTopColor: '#24242c',
+    },
+
+    profileAboutLogo: {
+      width: 42,
+      height: 42,
+      marginRight: 10,
+    },
+
+    profileAboutBrandTitle: {
+      color: '#ffffff',
+      fontSize: 15,
+      fontWeight: '800',
+    },
+
+    profileAboutBrandSubtitle: {
+      color: '#777780',
+      fontSize: 12,
+      marginTop: 2,
+    },
+
+    profileActionButton: {
+      minHeight: 54,
+      backgroundColor: '#19191f',
+      borderWidth: 1,
+      borderColor: '#2b2b34',
+      borderRadius: 16,
+      paddingHorizontal: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 14,
+    },
+
+    profileActionButtonPressed: {
+      backgroundColor: '#25252d',
+    },
+
+    profileActionText: {
+      color: '#ffffff',
+      fontSize: 14,
+      fontWeight: '700',
+    },
+
+    profileActionArrow: {
+      color: '#777780',
+      fontSize: 28,
+      fontWeight: '300',
+    },
+
+    profileRetryButton: {
+      marginTop: 16,
+      backgroundColor: '#25252d',
+      borderWidth: 1,
+      borderColor: '#343440',
+      borderRadius: 12,
+      paddingHorizontal: 18,
+      paddingVertical: 11,
+    },
+
+    profileRetryText: {
+      color: '#ffffff',
+      fontSize: 14,
+      fontWeight: '700',
+    },
+
+    profileBottomSpace: {
+      height: 35,
     },
 
     // ==========================================================
@@ -1835,6 +3318,383 @@ const styles =
     },
 
     // ==========================================================
+    // IMAGE OPTIONS MODAL
+    // ==========================================================
+
+    imageModalContainer: {
+      flex: 1,
+      justifyContent: 'flex-end',
+    },
+
+    imageModalBackdrop: {
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  backgroundColor: 'rgba(0, 0, 0, 0.68)',
+},
+
+    imageOptionsSheet: {
+      backgroundColor: '#17171d',
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      borderWidth: 1,
+      borderColor: '#2b2b34',
+      paddingHorizontal: 18,
+      paddingTop: 10,
+      paddingBottom: 28,
+    },
+
+    imageSheetHandle: {
+      width: 42,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: '#4a4a55',
+      alignSelf: 'center',
+      marginBottom: 18,
+    },
+
+    imageSheetTitle: {
+      color: '#ffffff',
+      fontSize: 21,
+      fontWeight: '800',
+      marginBottom: 5,
+    },
+
+    imageSheetSubtitle: {
+      color: '#858590',
+      fontSize: 13,
+      marginBottom: 18,
+    },
+
+    imageOption: {
+      minHeight: 70,
+      backgroundColor: '#202027',
+      borderWidth: 1,
+      borderColor: '#2d2d36',
+      borderRadius: 17,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 13,
+      marginBottom: 10,
+    },
+
+    imageOptionPressed: {
+      backgroundColor: '#2a2a33',
+      transform: [{ scale: 0.99 }],
+    },
+
+    imageOptionIcon: {
+      width: 46,
+      height: 46,
+      borderRadius: 14,
+      backgroundColor: '#2b2b34',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    imageOptionEmoji: {
+      fontSize: 22,
+    },
+
+    imageOptionTextContainer: {
+      flex: 1,
+      marginLeft: 13,
+    },
+
+    imageOptionTitle: {
+      color: '#ffffff',
+      fontSize: 16,
+      fontWeight: '700',
+    },
+
+    imageOptionSubtitle: {
+      color: '#858590',
+      fontSize: 12,
+      marginTop: 3,
+    },
+
+    imageOptionArrow: {
+      color: '#777780',
+      fontSize: 28,
+      fontWeight: '300',
+      marginLeft: 8,
+    },
+
+    imageCancelButton: {
+      height: 52,
+      borderRadius: 16,
+      backgroundColor: '#25252d',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 2,
+    },
+
+    imageCancelButtonPressed: {
+      backgroundColor: '#303038',
+    },
+
+    imageCancelText: {
+      color: '#ffffff',
+      fontSize: 15,
+      fontWeight: '700',
+    },
+
+    // ==========================================================
+    // AI MODE BAR
+    // ==========================================================
+
+    aiModeBar: {
+      minHeight: 52,
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: '#0b0b0f',
+    },
+
+    aiModePill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      minHeight: 42,
+      flex: 1,
+      marginRight: 8,
+      paddingHorizontal: 11,
+      backgroundColor: '#17171d',
+      borderWidth: 1,
+      borderColor: '#2b2b34',
+      borderRadius: 14,
+    },
+
+    aiModePillPressed: {
+      backgroundColor: '#22222a',
+    },
+
+    aiModePillIcon: {
+      fontSize: 19,
+      marginRight: 9,
+    },
+
+    aiModePillTextWrap: {
+      flex: 1,
+    },
+
+    aiModePillLabel: {
+      color: '#ffffff',
+      fontSize: 13,
+      fontWeight: '700',
+    },
+
+    aiModePillHint: {
+      color: '#777780',
+      fontSize: 10,
+      marginTop: 1,
+    },
+
+    aiModePillArrow: {
+      color: '#9a9aa4',
+      fontSize: 18,
+      marginLeft: 6,
+    },
+
+    exportChatButton: {
+      minHeight: 42,
+      paddingHorizontal: 12,
+      borderRadius: 14,
+      backgroundColor: '#17171d',
+      borderWidth: 1,
+      borderColor: '#2b2b34',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    exportChatButtonPressed: {
+      backgroundColor: '#25252d',
+    },
+
+    exportChatButtonDisabled: {
+      opacity: 0.35,
+    },
+
+    exportChatText: {
+      color: '#ffffff',
+      fontSize: 12,
+      fontWeight: '700',
+    },
+
+    // ==========================================================
+    // AI MODE MODAL
+    // ==========================================================
+
+    aiModeModalContainer: {
+      flex: 1,
+      justifyContent: 'flex-end',
+    },
+
+    aiModeModalBackdrop: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      backgroundColor: 'rgba(0, 0, 0, 0.68)',
+    },
+
+    aiModeSheet: {
+      backgroundColor: '#17171d',
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      borderWidth: 1,
+      borderColor: '#2b2b34',
+      paddingHorizontal: 18,
+      paddingTop: 10,
+      paddingBottom: 28,
+    },
+
+    aiModeSheetHandle: {
+      width: 42,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: '#4a4a55',
+      alignSelf: 'center',
+      marginBottom: 18,
+    },
+
+    aiModeSheetTitle: {
+      color: '#ffffff',
+      fontSize: 21,
+      fontWeight: '800',
+      marginBottom: 5,
+    },
+
+    aiModeSheetSubtitle: {
+      color: '#858590',
+      fontSize: 13,
+      marginBottom: 18,
+    },
+
+    aiModeOption: {
+      minHeight: 66,
+      backgroundColor: '#202027',
+      borderWidth: 1,
+      borderColor: '#2d2d36',
+      borderRadius: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      marginBottom: 9,
+    },
+
+    aiModeOptionSelected: {
+      borderColor: '#5b5b69',
+      backgroundColor: '#25252d',
+    },
+
+    aiModeOptionPressed: {
+      opacity: 0.82,
+    },
+
+    aiModeOptionIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 13,
+      backgroundColor: '#2b2b34',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    aiModeOptionEmoji: {
+      fontSize: 21,
+    },
+
+    aiModeOptionText: {
+      flex: 1,
+      marginLeft: 12,
+    },
+
+    aiModeOptionTitle: {
+      color: '#ffffff',
+      fontSize: 15,
+      fontWeight: '700',
+    },
+
+    aiModeOptionSubtitle: {
+      color: '#858590',
+      fontSize: 12,
+      marginTop: 3,
+    },
+
+    aiModeCheck: {
+      color: '#ffffff',
+      fontSize: 20,
+      fontWeight: '800',
+      marginLeft: 8,
+    },
+
+    aiModeCancelButton: {
+      height: 52,
+      borderRadius: 16,
+      backgroundColor: '#25252d',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 2,
+    },
+
+    aiModeCancelPressed: {
+      backgroundColor: '#303038',
+    },
+
+    aiModeCancelText: {
+      color: '#ffffff',
+      fontSize: 15,
+      fontWeight: '700',
+    },
+
+    // ==========================================================
+    // EMPTY PROMPT CHIPS
+    // ==========================================================
+
+    promptGrid: {
+      width: '100%',
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'center',
+      marginTop: 22,
+      gap: 9,
+    },
+
+    promptChip: {
+      minHeight: 42,
+      width: '47%',
+      backgroundColor: '#17171d',
+      borderWidth: 1,
+      borderColor: '#2b2b34',
+      borderRadius: 14,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 8,
+    },
+
+    promptChipPressed: {
+      backgroundColor: '#25252d',
+      transform: [{ scale: 0.98 }],
+    },
+
+    promptChipIcon: {
+      fontSize: 16,
+      marginRight: 6,
+    },
+
+    promptChipText: {
+      color: '#d8d8df',
+      fontSize: 11,
+      fontWeight: '700',
+    },
+
+    // ==========================================================
     // INPUT
     // ==========================================================
 
@@ -1902,6 +3762,23 @@ const styles =
       justifyContent: 'center',
       marginRight: 2,
       marginBottom: 0,
+    },
+
+    voiceButton: {
+      width: 40,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 2,
+      marginBottom: 0,
+    },
+
+    voiceButtonActive: {
+      opacity: 0.6,
+    },
+
+    voiceText: {
+      fontSize: 21,
     },
 
     attachText: {
