@@ -98,6 +98,26 @@ const AI_MODES = [
   },
 ];
 
+// ============================================================
+// FILE UPLOAD + AI ANALYSIS
+// ============================================================
+
+const SUPPORTED_FILE_MIME_TYPES = [
+  'application/pdf',
+  'text/plain',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+];
+
+const FILE_MIME_BY_EXTENSION: Record<string, string> = {
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  docx:
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+
+// Maximum accepted file size for uploads (matches the server limit).
+const MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024; // 8 MB
+
 export default function HomeScreen() {
   // ============================================================
   // AUTH
@@ -139,6 +159,9 @@ export default function HomeScreen() {
   const [loading, setLoading] =
     useState(false);
 
+  const [processingFile, setProcessingFile] =
+    useState(false);
+
   // ============================================================
   // VOICE INPUT
   // ============================================================
@@ -160,6 +183,13 @@ export default function HomeScreen() {
 
   const [selectedImage, setSelectedImage] =
     useState<string | null>(null);
+
+  const [selectedFile, setSelectedFile] =
+    useState<{
+      name: string;
+      mimeType: string;
+      base64: string;
+    } | null>(null);
 
   const [conversationId, setConversationId]=
     useState<string | null>(null);
@@ -509,6 +539,7 @@ export default function HomeScreen() {
 
       setMessage('');
       clearSelectedImage();
+      clearSelectedFile();
 
       setShowHistory(false);
 
@@ -540,6 +571,7 @@ export default function HomeScreen() {
 
     setMessage('');
     clearSelectedImage();
+    clearSelectedFile();
 
     setFeedback({});
 
@@ -1041,6 +1073,10 @@ export default function HomeScreen() {
     setSelectedImageMimeType('image/jpeg');
   };
 
+  const clearSelectedFile = () => {
+    setSelectedFile(null);
+  };
+
   const pickImage = async () => {
     try {
       const permissionResult =
@@ -1072,6 +1108,8 @@ export default function HomeScreen() {
             ? asset.mimeType
             : 'image/jpeg'
         );
+
+        clearSelectedFile();
       }
     } catch (error) {
       console.error('Image picker error:', error);
@@ -1114,6 +1152,8 @@ export default function HomeScreen() {
             ? asset.mimeType
             : 'image/jpeg'
         );
+
+        clearSelectedFile();
       }
     } catch (error) {
       console.error('Camera error:', error);
@@ -1152,45 +1192,102 @@ export default function HomeScreen() {
 
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: 'image/*',
+        type: SUPPORTED_FILE_MIME_TYPES,
         copyToCacheDirectory: true,
         multiple: false,
       });
 
-      if (!result.canceled && result.assets?.length > 0) {
-        const asset = result.assets[0];
+      if (result.canceled) {
+        // User cancelled the picker - not an error.
+        return;
+      }
 
-        setSelectedImage(asset.uri);
+      const asset = result.assets?.[0];
 
-        const response = await fetch(asset.uri);
-        const blob = await response.blob();
+      if (!asset) {
+        Alert.alert('File Error', 'No file was selected.');
+        return;
+      }
 
+      const assetName = asset.name || 'document';
+      const extension = assetName.includes('.')
+        ? assetName.substring(assetName.lastIndexOf('.') + 1).toLowerCase()
+        : '';
+
+      const resolvedMimeType =
+        asset.mimeType && SUPPORTED_FILE_MIME_TYPES.includes(asset.mimeType)
+          ? asset.mimeType
+          : FILE_MIME_BY_EXTENSION[extension];
+
+      if (!resolvedMimeType) {
+        Alert.alert(
+          'Unsupported File',
+          'Please select a PDF, TXT, or DOCX file.'
+        );
+        return;
+      }
+
+      if (typeof asset.size === 'number' && asset.size > MAX_FILE_SIZE_BYTES) {
+        Alert.alert(
+          'File Too Large',
+          'This file is larger than 8 MB. Please choose a smaller file.'
+        );
+        return;
+      }
+
+      const response = await fetch(asset.uri);
+
+      if (!response.ok) {
+        throw new Error('Could not read the selected file.');
+      }
+
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        Alert.alert('Empty File', 'The selected file is empty.');
+        return;
+      }
+
+      const base64 = await new Promise<string | null>((resolve) => {
         const reader = new FileReader();
 
         reader.onloadend = () => {
           const resultData = reader.result;
 
-          const base64 =
+          resolve(
             typeof resultData === 'string'
               ? resultData.split(',')[1] || null
-              : null;
-
-          setSelectedImageBase64(base64);
-          setSelectedImageMimeType(
-            asset.mimeType?.startsWith('image/')
-              ? asset.mimeType
-              : 'image/jpeg'
+              : null
           );
         };
 
+        reader.onerror = () => resolve(null);
+
         reader.readAsDataURL(blob);
+      });
+
+      if (!base64) {
+        Alert.alert(
+          'File Error',
+          'Could not read the selected file. Please try again.'
+        );
+        return;
       }
+
+      // Only one attachment at a time.
+      clearSelectedImage();
+
+      setSelectedFile({
+        name: assetName,
+        mimeType: resolvedMimeType,
+        base64,
+      });
     } catch (error) {
       console.error('File picker error:', error);
 
       Alert.alert(
         'File Error',
-        'Could not select the image file. Please try again.'
+        'Could not select the file. Please try again.'
       );
     }
   };
@@ -1246,7 +1343,7 @@ export default function HomeScreen() {
  const sendMessage = async (voiceMessage?: string, fromAegisVoice = false) => {
   const cleanMessage = (voiceMessage ?? message).trim();
 
-  if ((!cleanMessage && !selectedImage) || loading) {
+  if ((!cleanMessage && !selectedImage && !selectedFile) || loading) {
     return;
   }
 
@@ -1254,11 +1351,16 @@ export default function HomeScreen() {
   const modeInstruction =
     selectedMode.key === 'General'
       ? ''
-      : `\\n\\n[Assistant Mode: ${selectedMode.title}]\\n${selectedMode.instruction}`;
+      : `\n\n[Assistant Mode: ${selectedMode.title}]\n${selectedMode.instruction}`;
 
-  const requestMessage = cleanMessage
-    ? `${cleanMessage}${modeInstruction}`
-    : '';
+  const fallbackPrompt = selectedFile
+    ? `Please analyze the attached file ${selectedFile.name}.`
+    : selectedImage
+      ? 'Please analyze this image.'
+      : '';
+
+  const requestMessage =
+    `${cleanMessage || fallbackPrompt}${modeInstruction}`;
 
   const token = await AsyncStorage.getItem(
     'aegis_auth_token'
@@ -1272,8 +1374,11 @@ export default function HomeScreen() {
   const userMessage: Message = {
     id: Date.now().toString(),
     role: 'user',
-    content:
-      cleanMessage || '📷 Image',
+    content: selectedFile
+      ? cleanMessage
+        ? `📎 ${selectedFile.name}\n\n${cleanMessage}`
+        : `📎 ${selectedFile.name}`
+      : cleanMessage || '📷 Image',
   };
 
   setMessages((prev) => [
@@ -1283,6 +1388,7 @@ export default function HomeScreen() {
 
   setMessage('');
   setLoading(true);
+  setProcessingFile(!!selectedFile);
 
   try {
     let imageData: string | null = null;
@@ -1319,13 +1425,26 @@ if (selectedImageBase64) {
 
           message:
             requestMessage ||
-            'Please analyze this image.',
+            (selectedFile
+              ? `Please analyze the attached file ${selectedFile.name}.`
+              : 'Please analyze this image.'),
 
           imageData:
             imageData,
 
           imageMimeType:
             imageMimeType,
+
+          ...(selectedFile
+            ? {
+                fileData:
+                  selectedFile.base64,
+                fileMimeType:
+                  selectedFile.mimeType,
+                fileName:
+                  selectedFile.name,
+              }
+            : {}),
         }),
       }
     );
@@ -1393,6 +1512,7 @@ if (selectedImageBase64) {
 
     // Clear selected image and its encoded data
     clearSelectedImage();
+    clearSelectedFile();
 
   } catch (error) {
     console.error(
@@ -1400,12 +1520,33 @@ if (selectedImageBase64) {
       error
     );
 
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : '';
+
+    const userFriendly =
+      errorMessage.includes('too large') ||
+      errorMessage.toLowerCase().includes('too large')
+        ? 'The file is too large. Maximum size is 8 MB.'
+        : errorMessage.includes('Unsupported file')
+          ? 'Unsupported file type. Please select a PDF, TXT, or DOCX file.'
+          : errorMessage.includes('empty')
+            ? 'The uploaded file is empty. Please select a valid file.'
+            : errorMessage.includes('not configured') ||
+                errorMessage.includes('ECONNREFUSED') ||
+                errorMessage.includes('Network request failed') ||
+                errorMessage.includes('Failed to fetch')
+              ? 'Network error. Please check your internet connection and try again.'
+              : 'Could not send the message. Please try again.';
+
     Alert.alert(
       'Message Error',
-      'Could not send the message. Please try again.'
+      userFriendly
     );
   } finally {
     setLoading(false);
+    setProcessingFile(false);
 
     if (fromAegisVoice) {
       voiceCommandInProgressRef.current = false;
@@ -1866,7 +2007,10 @@ if (selectedImageBase64) {
       <View style={styles.aiModeBar}>
         <Pressable
           onPress={() => setShowAIModeModal(true)}
-          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel={`AI Mode: ${getSelectedMode().title}`}
+          accessibilityHint="Choose the AI mode for your next message"
+          accessibilityState={{ expanded: showAIModeModal }}
           style={({ pressed }) => [
             styles.aiModePill,
             pressed && styles.aiModePillPressed,
@@ -1877,7 +2021,7 @@ if (selectedImageBase64) {
           </Text>
           <View style={styles.aiModePillTextWrap}>
             <Text style={styles.aiModePillLabel}>
-              {getSelectedMode().title} Mode
+              AI Mode: {getSelectedMode().title}
             </Text>
             <Text style={styles.aiModePillHint}>Tap to change</Text>
           </View>
@@ -1929,6 +2073,9 @@ if (selectedImageBase64) {
               <Pressable
                 key={mode.key}
                 onPress={() => selectAIMode(mode.key)}
+                accessibilityRole="radio"
+                accessibilityLabel={mode.title}
+                accessibilityState={{ checked: aiMode === mode.key }}
                 style={({ pressed }) => [
                   styles.aiModeOption,
                   aiMode === mode.key && styles.aiModeOptionSelected,
@@ -2408,7 +2555,9 @@ if (selectedImageBase64) {
                     styles.loadingText
                   }
                 >
-                  AegisAI is thinking
+                  {processingFile
+                    ? 'Analyzing your file…'
+                    : 'AegisAI is thinking'}
                 </Text>
               </View>
             </View>
@@ -2434,6 +2583,37 @@ if (selectedImageBase64) {
 
               <Pressable
                 onPress={clearSelectedImage}
+                style={styles.removeImageButton}
+                hitSlop={8}
+              >
+                <Text
+                  style={styles.removeImageText}
+                >
+                  ×
+                </Text>
+              </Pressable>
+            </View>
+          )}
+
+          {selectedFile && (
+            <View
+              style={styles.filePreviewContainer}
+            >
+              <View style={styles.filePreviewContent}>
+                <Text style={styles.filePreviewEmoji}>
+                  📎
+                </Text>
+
+                <Text
+                  style={styles.filePreviewName}
+                  numberOfLines={1}
+                >
+                  {selectedFile.name}
+                </Text>
+              </View>
+
+              <Pressable
+                onPress={clearSelectedFile}
                 style={styles.removeImageButton}
                 hitSlop={8}
               >
@@ -2514,13 +2694,13 @@ if (selectedImageBase64) {
             <Pressable
   onPress={() => sendMessage()}
   disabled={
-    (!message.trim() && !selectedImage) ||
+    (!message.trim() && !selectedImage && !selectedFile) ||
     loading
   }
 
               style={[
   styles.sendButton,
-  ((!message.trim() && !selectedImage) || loading) &&
+  ((!message.trim() && !selectedImage && !selectedFile) || loading) &&
     styles.sendButtonDisabled,
 ]}
             >
@@ -2657,7 +2837,7 @@ if (selectedImageBase64) {
                     Files
                   </Text>
                   <Text style={styles.imageOptionSubtitle}>
-                    Select an image file
+                    PDF, TXT, or DOCX
                   </Text>
                 </View>
 
@@ -3446,30 +3626,34 @@ const styles =
     // ==========================================================
 
     aiModeBar: {
-      minHeight: 52,
+      minHeight: 72,
+      flexShrink: 0,
       paddingHorizontal: 14,
-      paddingVertical: 7,
+      paddingVertical: 10,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       backgroundColor: '#0b0b0f',
+      borderBottomWidth: 1,
+      borderBottomColor: '#2b2b34',
     },
 
     aiModePill: {
       flexDirection: 'row',
       alignItems: 'center',
-      minHeight: 42,
+      minHeight: 52,
       flex: 1,
       marginRight: 8,
       paddingHorizontal: 11,
-      backgroundColor: '#17171d',
+      paddingVertical: 8,
+      backgroundColor: '#22222a',
       borderWidth: 1,
-      borderColor: '#2b2b34',
+      borderColor: '#5b5b69',
       borderRadius: 14,
     },
 
     aiModePillPressed: {
-      backgroundColor: '#22222a',
+      backgroundColor: '#303038',
     },
 
     aiModePillIcon: {
@@ -3483,13 +3667,13 @@ const styles =
 
     aiModePillLabel: {
       color: '#ffffff',
-      fontSize: 13,
+      fontSize: 15,
       fontWeight: '700',
     },
 
     aiModePillHint: {
-      color: '#777780',
-      fontSize: 10,
+      color: '#b5b5c0',
+      fontSize: 12,
       marginTop: 1,
     },
 
@@ -3738,6 +3922,37 @@ const styles =
       color: '#ffffff',
       fontSize: 20,
       lineHeight: 22,
+      fontWeight: '600',
+    },
+
+    filePreviewContainer: {
+      position: 'relative',
+      marginBottom: 10,
+      marginLeft: 4,
+      alignSelf: 'stretch',
+      backgroundColor: '#17171d',
+      borderWidth: 1,
+      borderColor: '#2b2b34',
+      borderRadius: 14,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      overflow: 'visible',
+    },
+
+    filePreviewContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
+    filePreviewEmoji: {
+      fontSize: 16,
+      marginRight: 8,
+    },
+
+    filePreviewName: {
+      flex: 1,
+      color: '#ffffff',
+      fontSize: 14,
       fontWeight: '600',
     },
 

@@ -102,7 +102,9 @@ app.use(cookieParser());
 
 app.use(
   express.json({
-    limit: '2mb'
+    // 15 MB so uploaded files (Base64 in JSON) can be accepted.
+    // Client-side file limit is 8 MB raw, ~10.7 MB as Base64.
+    limit: '15mb'
   })
 );
 

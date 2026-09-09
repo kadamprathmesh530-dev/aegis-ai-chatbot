@@ -4,3 +4,20 @@ data/
 *.db
 *.db-shm
 *.db-wal
+
+# Build/test logs
+*.log
+
+# Expo cache (repo root)
+.expo/
+
+# IDE / assistant config
+.idea/
+.vscode/
+.claude/
+
+# Local backup copies of source files
+*_backup.tsx
+
+# Generated test artifacts
+tests/*.docx

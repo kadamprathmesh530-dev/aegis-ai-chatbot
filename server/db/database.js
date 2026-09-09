@@ -1,5 +1,20 @@
+const net = require('net');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
+
+/*
+ * --------------------------------------------------
+ * PostgreSQL / Neon connection configuration
+ * --------------------------------------------------
+ *
+ * Node 20+ may use automatic IPv4/IPv6 family
+ * selection. For this Neon connection we use a
+ * deterministic IPv4 connection attempt.
+ */
+
+if (typeof net.setDefaultAutoSelectFamily === 'function') {
+  net.setDefaultAutoSelectFamily(false);
+}
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -7,11 +22,74 @@ if (!databaseUrl) {
   throw new Error('DATABASE_URL is not configured.');
 }
 
+/*
+ * Keep credentials inside the environment variable.
+ * Never print databaseUrl.
+ *
+ * We remove sslmode from the connection string and
+ * configure SSL explicitly below. This avoids the
+ * pg connection-string SSL mode warning while
+ * keeping PostgreSQL TLS enabled.
+ */
+let normalizedDatabaseUrl = databaseUrl;
+
+try {
+  const url = new URL(databaseUrl);
+
+  url.searchParams.delete('sslmode');
+  url.searchParams.delete('channel_binding');
+
+  normalizedDatabaseUrl = url.toString();
+} catch (err) {
+  throw new Error(
+    'DATABASE_URL is invalid. Please check the PostgreSQL connection string.'
+  );
+}
+
 const pool = new Pool({
-  connectionString: databaseUrl,
+  connectionString: normalizedDatabaseUrl,
+
+  /*
+   * Neon requires an encrypted PostgreSQL connection.
+   * Do NOT disable SSL.
+   */
   ssl: {
     rejectUnauthorized: false
-  }
+  },
+
+  /*
+   * Prefer IPv4 for the Neon connection.
+   */
+  family: 4,
+
+  /*
+   * Keep idle connections alive.
+   */
+  keepAlive: true,
+
+  /*
+   * Give the connection enough time to complete
+   * DNS/TCP/TLS/PostgreSQL negotiation.
+   */
+  connectionTimeoutMillis: 15000,
+
+  /*
+   * Avoid opening an unnecessarily large number
+   * of database connections for this application.
+   */
+  max: 10,
+
+  /*
+   * Recycle idle connections after a reasonable period.
+   */
+  idleTimeoutMillis: 30000
+});
+
+pool.on('error', (err) => {
+  console.error(
+    '[DB] Unexpected PostgreSQL pool error:',
+    err.message
+  );
 });
 
 pool.on('error', (err) => {
@@ -244,14 +322,16 @@ const userQueries = {
     const result = await pool.query(
       `
         SELECT
-          id,
-          username,
-          email,
-          role,
-          created_at,
-          last_login_at
-        FROM users
-        WHERE id = $1
+  id,
+  username,
+  email,
+  role,
+  created_at,
+  last_login_at,
+  auth_provider,
+  avatar_url
+FROM users
+WHERE id = $1
       `,
       [id]
     );
@@ -609,6 +689,20 @@ const conversationQueries = {
   },
 
 
+  // ------------------------------------------------------------
+  // Compatibility aliases — some routes still use the older
+  // method names (findById / updateTimestamp). They delegate
+  // to the current implementations so no logic is duplicated.
+  // ------------------------------------------------------------
+
+  async findById(id, userId) {
+    return this.getByIdAndUser(id, userId);
+  },
+
+  async updateTimestamp(id) {
+    return this.touchUpdatedAt(id);
+  },
+
   async touchUpdatedAt(id) {
     await databaseReady;
 
@@ -814,6 +908,20 @@ const messageQueries = {
     return result.rows[0];
   },
 
+
+  // ------------------------------------------------------------
+  // Compatibility aliases — some routes still use the older
+  // method names (create / findByConversation). They delegate
+  // to the current implementations so no logic is duplicated.
+  // ------------------------------------------------------------
+
+  async create(conversationId, role, content) {
+    return this.add(conversationId, role, content);
+  },
+
+  async findByConversation(conversationId) {
+    return this.getByConversationId(conversationId);
+  },
 
   async getRecentContext(conversationId, limit = 10) {
     await databaseReady;

@@ -12,6 +12,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleGenAI } = require('@google/genai');
 const OpenAI = require('openai');
 const { tavily } = require('@tavily/core');
+const mammoth = require('mammoth');
 
 const tavilyClient = tavily({
   apiKey: process.env.TAVILY_API_KEY
@@ -25,6 +26,28 @@ const nvidiaAI = new OpenAI({
   apiKey: process.env.NVIDIA_API_KEY,
   baseURL: 'https://integrate.api.nvidia.com/v1'
 });
+
+// ============================================================
+// FILE ANALYSIS CONSTANTS
+// ============================================================
+
+const SUPPORTED_FILE_MIME_TYPES = new Set([
+  'application/pdf',
+  'text/plain',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+]);
+
+const FILE_MIME_BY_EXTENSION = {
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+};
+
+const DOCX_MIME_TYPE =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+// Maximum accepted file size (raw bytes) for uploaded files.
+const MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024; // 8 MB
 
 async function testWebSearch(query) {
   const response = await webAI.models.generateContent({
@@ -64,7 +87,6 @@ router.get('/test-web-search', async (req, res) => {
 
 router.use(authenticateToken);
 
-
 /**
  * ============================================================
  * AEGIS AI SYSTEM IDENTITY
@@ -77,7 +99,6 @@ You are Aegis AI, a helpful, intelligent, friendly, accurate and capable AI assi
 Your name is Aegis AI.
 
 You were created and developed by Prathmesh Kadam.
-
 
 ==================================================
 IDENTITY RULES
@@ -106,8 +127,6 @@ You may explain that Aegis AI uses Google's Gemini models through the Gemini API
 Never introduce yourself as Gemini when the user asks who you are.
 
 You are Aegis AI, not Gemini.
-
-
 
 ==================================================
 LANGUAGE & CONVERSATION STYLE
@@ -174,8 +193,6 @@ These language rules apply to:
 - Web-search responses
 - Fallback responses
 
-
-
 ==================================================
 SMART ANSWER ENGINE
 ==================================================
@@ -189,9 +206,6 @@ Understand the user's actual question before answering.
 Automatically determine the appropriate response style from the question.
 
 Do not use fixed-question responses when the AI can generate a proper answer.
-
-
-
 
 ==================================================
 ACADEMIC QUESTIONS
@@ -211,9 +225,6 @@ school, college, diploma or other academic questions:
 - If the question contains insufficient information, clearly say what information is missing.
 - Never invent given values.
 
-
-
-
 ==================================================
 MATHEMATICS
 ==================================================
@@ -229,16 +240,7 @@ For mathematical problems:
 
 Use LaTeX/MathJax notation for mathematical formulas.
 
-Example:
-
-\\[
-a = \\frac{dv}{dt}
-\\]
-
 For simple calculations, keep the explanation concise.
-
-
-
 
 ==================================================
 PHYSICS
@@ -254,14 +256,6 @@ For Physics problems:
 - Include the correct SI unit.
 - Clearly state the final answer.
 
-For example:
-
-\\[
-F = ma
-\\\\
-
-
-
 ==================================================
 CHEMISTRY
 ==================================================
@@ -275,10 +269,6 @@ For Chemistry questions:
 - For numerical problems, show the calculation step by step.
 - For JEE/NEET questions, focus on exam-relevant concepts and common mistakes.
 
-
-
-
-
 ==================================================
 BIOLOGY
 ==================================================
@@ -291,10 +281,6 @@ For Biology and NEET questions:
 - Mention important facts when relevant.
 - Do not unnecessarily make answers complicated.
 
-
-
-
-
 ==================================================
 JEE / NEET MODE
 ==================================================
@@ -306,10 +292,6 @@ When the question is clearly related to JEE or NEET:
 - For numerical questions, show a clear solution.
 - If useful, mention a short shortcut or exam tip.
 - Do not sacrifice correctness for brevity.
-
-
-
-
 
 ==================================================
 PROGRAMMING / CODING
@@ -325,10 +307,6 @@ For programming questions:
 - If the user provides an error, identify the likely cause and provide the corrected code.
 - Do not assume Python unless the user specifies Python.
 
-
-
-
-
 ==================================================
 GENERAL QUESTIONS
 ==================================================
@@ -339,10 +317,6 @@ For general questions:
 - Give context when useful.
 - Avoid unnecessary filler.
 - If the question is ambiguous, ask a concise clarification instead of guessing.
-
-
-
-
 
 ==================================================
 CONVERSATION CONTEXT
@@ -362,10 +336,6 @@ If the user says:
 Use the conversation context to determine what they are referring to.
 
 Do not unnecessarily ask the user to repeat information that is already available in the conversation.
-
-
-
-
 
 ==================================================
 RESPONSE QUALITY
@@ -388,804 +358,507 @@ Do not blindly follow an incorrect assumption in the user's question. Politely p
 Be helpful, friendly, accurate and concise.
 `;
 
+/**
+ * ============================================================
+ * LANGUAGE DETECTION
+ * ============================================================
+ */
+
 function detectAegisLanguage(text) {
   const value = (text || '').trim().toLowerCase();
 
-  // ============================================================
-  // HINDI / MARATHI - DEVANAGARI
-  // ============================================================
-
   if (/[\u0900-\u097F]/.test(value)) {
-
-    // Common Marathi words
     if (
-      /(आहे|आहेत|म्हणजे|मला|तुला|तुम्ही|मराठी|मध्ये|साठी|कसे|कसं|करायचं|करा|काय|कसा|कशी)/u.test(value)
+      /(आहे|आहेत|म्हणजे|मला|तुला|तुम्ही|मराठी|मध्ये|साठी|कसे|कसं|करायचं|करा|काय|कसा|कशी)/u.test(
+        value
+      )
     ) {
       return 'marathi';
     }
 
-    // Otherwise treat Devanagari as Hindi
     return 'hindi';
   }
 
-
-  // ============================================================
-  // HINGLISH - HINDI WRITTEN USING ENGLISH LETTERS
-  // ============================================================
-
   if (
-    /\b(bhai|kya|hai|hain|mujhe|mera|meri|tum|aap|kaise|kaisa|nahi|nahin|karna|karo|chahiye|bata|batao|kyu|kyon|samjha|samajh|se|ko|ke|ka|ki|me|mein)\b/i
-      .test(value.replace(/\n/g, ' '))
+    /\b(bhai|kya|hai|hain|mujhe|mera|meri|tum|aap|kaise|kaisa|nahi|nahin|karna|karo|chahiye|bata|batao|kyu|kyon|samjha|samajh|se|ko|ke|ka|ki|me|mein)\b/i.test(
+      value.replace(/\n/g, ' ')
+    )
   ) {
     return 'hinglish';
   }
 
-
-  // ============================================================
-  // MARATHI - WRITTEN USING ENGLISH LETTERS
-  // ============================================================
-
   if (
-    /\b(kaay|kay|ahe|aahe|mala|majha|majhi|tula|tumhi|kasa|kashi|nahi|karaycha|karayche|sathi|madhe|mhanje|sang|sanga|kuthe|kadhi)\b/i
-      .test(value.replace(/\n/g, ' '))
+    /\b(kaay|kay|ahe|aahe|mala|majha|majhi|tula|tumhi|kasa|kashi|nahi|karaycha|karayche|sathi|madhe|mhanje|sang|sanga|kuthe|kadhi)\b/i.test(
+      value.replace(/\n/g, ' ')
+    )
   ) {
     return 'marathi-latin';
   }
 
-
-  // ============================================================
-  // DEFAULT
-  // ============================================================
-
   return 'english';
 }
-
-
 /**
  * ============================================================
- * AEGIS AI FALLBACK RESPONSE
- * ============================================================
- *
- * Used when:
- * 1. Gemini API key is missing
- * 2. Gemini request fails
- * 3. All AI models fail
- *
- * Fallback also follows the user's language.
+ * HELPER FUNCTIONS
  * ============================================================
  */
 
-function localizedFallbackResponse(userPrompt) {
+function cleanAIText(text) {
+  if (!text) return '';
 
-  const language = detectAegisLanguage(userPrompt);
-
-
-  // ============================================================
-  // HINGLISH
-  // ============================================================
-
-  if (language === 'hinglish') {
-
-    return `Hello! 👋
-
-Main Aegis AI hoon, Prathmesh Kadam ne mujhe create aur develop kiya hai.
-
-Aap apna question pucho, main Hinglish mein help karunga.`;
-  }
-
-
-  // ============================================================
-  // MARATHI
-  // ============================================================
-
-  if (language === 'marathi') {
-
-    return `नमस्कार! 👋
-
-मी Aegis AI आहे, मला Prathmesh Kadam यांनी तयार आणि विकसित केले आहे.
-
-तुमचा प्रश्न विचारा, मी मराठीत मदत करतो.`;
-  }
-
-
-  // ============================================================
-  // MARATHI - ENGLISH LETTERS
-  // ============================================================
-
-  if (language === 'marathi-latin') {
-
-    return `Namaskar! 👋
-
-Mi Aegis AI aahe, mala Prathmesh Kadam yanni create ani develop kela aahe.
-
-Tumcha question vichara, mi Marathi madhye help karen.`;
-  }
-
-
-  // ============================================================
-  // HINDI
-  // ============================================================
-
-  if (language === 'hindi') {
-
-    return `नमस्ते! 👋
-
-मैं Aegis AI हूँ, जिसे Prathmesh Kadam ने बनाया और विकसित किया है।
-
-आप अपना सवाल पूछिए, मैं हिंदी में मदद करूँगा।`;
-  }
-
-
-  // ============================================================
-  // ENGLISH
-  // ============================================================
-
-  return `Hello! 👋
-
-I am Aegis AI, an AI assistant created and developed by Prathmesh Kadam.
-
-Ask me your question and I'll help you.`;
+  return String(text)
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
 }
 
+function getGeminiModel(genAI, modelName) {
+  return genAI.getGenerativeModel({
+    model: modelName,
+    systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+  });
+}
 
 /**
  * ============================================================
- * MAIN FALLBACK FUNCTION
+ * AI FALLBACK RESPONSE
  * ============================================================
  */
 
-function generateFallbackResponse(userPrompt, conversationHistory = []) {
-
-  const promptLower = userPrompt.toLowerCase().trim();
-
-  const language = detectAegisLanguage(userPrompt);
-
-
-  // ============================================================
-  // IDENTITY / DEVELOPER QUESTION
-  // ============================================================
-
-  const developerQuestion =
-    /\b(who\s+(created|developed|made|built|designed|programmed)\s+(you|aegis))\b/i.test(
-      promptLower
-    ) ||
-    /\b(who\s+is\s+(your|the)\s+(developer|creator|maker|programmer))\b/i.test(
-      promptLower
-    ) ||
-    promptLower.includes('who developed you') ||
-    promptLower.includes('who created you') ||
-    promptLower.includes('who made you') ||
-    promptLower.includes('who built you') ||
-    promptLower.includes('who is your developer') ||
-    promptLower.includes('who is your creator');
-
-
-  if (developerQuestion) {
-
-    if (language === 'hinglish') {
-      return `Mujhe Prathmesh Kadam ne create aur develop kiya hai.`;
-    }
-
-    if (language === 'marathi') {
-      return `मला Prathmesh Kadam यांनी तयार आणि विकसित केले आहे.`;
-    }
-
-    if (language === 'marathi-latin') {
-      return `Mala Prathmesh Kadam yanni create ani develop kela aahe.`;
-    }
-
-    if (language === 'hindi') {
-      return `मुझे Prathmesh Kadam ने बनाया और विकसित किया है।`;
-    }
-
-    return `I was created and developed by Prathmesh Kadam.`;
-  }
-
-
-  // ============================================================
-  // WHO ARE YOU?
-  // ============================================================
-
-  if (
-    promptLower.includes('who are you') ||
-    promptLower.includes('what are you') ||
-    promptLower.includes('introduce yourself')
-  ) {
-
-    if (language === 'hinglish') {
-
-      return `Main Aegis AI hoon, Prathmesh Kadam ne mujhe create aur develop kiya hai.
-
-Main coding, programming, mathematics, technical questions, explanations aur bahut saare tasks mein help kar sakta hoon.`;
-    }
-
-    if (language === 'marathi') {
-
-      return `मी Aegis AI आहे, मला Prathmesh Kadam यांनी तयार आणि विकसित केले आहे.
-
-मी coding, programming, mathematics, technical questions आणि इतर अनेक कामांमध्ये मदत करू शकतो.`;
-    }
-
-    if (language === 'marathi-latin') {
-
-      return `Mi Aegis AI aahe, mala Prathmesh Kadam yanni create ani develop kela aahe.
-
-Mi coding, programming, mathematics, technical questions ani itar anek tasks madhye help karu shakto.`;
-    }
-
-    if (language === 'hindi') {
-
-      return `मैं Aegis AI हूँ, जिसे Prathmesh Kadam ने बनाया और विकसित किया है।
-
-मैं coding, programming, mathematics, technical questions और कई दूसरे tasks में मदद कर सकता हूँ।`;
-    }
-
-    return `I am Aegis AI, an AI assistant created and developed by Prathmesh Kadam.
-
-I can help you with coding, programming, mathematics, technical questions, explanations, brainstorming, and many other tasks.`;
-  }
-
-
-  // ============================================================
-  // GREETING
-  // ============================================================
-
-  if (
-    /^(hello|hi|hey|hii|helo|good morning|good afternoon|good evening)[!.,\s]*$/i
-      .test(promptLower)
-  ) {
-
-    if (language === 'hinglish') {
-      return `Hello bhai! 👋
-
-Main Aegis AI hoon.
-
-Kaise help karu?`;
-    }
-
-    if (language === 'marathi') {
-      return `नमस्कार! 👋
-
-मी Aegis AI आहे.
-
-मी तुमची कशी मदत करू?`;
-    }
-
-    if (language === 'marathi-latin') {
-      return `Namaskar! 👋
-
-Mi Aegis AI aahe.
-
-Mi tumchi kashi help karu?`;
-    }
-
-    if (language === 'hindi') {
-      return `नमस्ते! 👋
-
-मैं Aegis AI हूँ।
-
-मैं आपकी कैसे मदद करूँ?`;
-    }
-
-    return `Hello! 👋
-
-I am Aegis AI.
-
-How can I help you today?`;
-  }
-
-
-  // ============================================================
-  // PYTHON QUESTION - NON-ENGLISH FALLBACK
-  // ============================================================
-
-  if (
-    promptLower.includes('python') &&
-    (
-      promptLower.includes('kya') ||
-      promptLower.includes('hai') ||
-      promptLower.includes('samjha') ||
-      promptLower.includes('समझाओ') ||
-      promptLower.includes('म्हणजे') ||
-      promptLower.includes('आहे')
-    )
-  ) {
-
-    if (language === 'hinglish') {
-
-      return `## Python kya hai? 🐍
-
-Python ek **high-level, interpreted aur general-purpose programming language** hai.
-
-Simple words mein, Python ka syntax easy aur readable hota hai.
-
-Python ka use:
-- AI aur Machine Learning
-- Data Science
-- Web Development
-- Automation
-- Software Development
-
-mein kiya jata hai.
-
-Example:
-
-\`\`\`python
-print("Hello, World!")
-\`\`\`
-
-Output:
-
-\`\`\`
-Hello, World!
-\`\`\``;
-    }
-
-    if (language === 'marathi') {
-
-      return `## Python म्हणजे काय? 🐍
-
-Python ही एक **high-level, interpreted आणि general-purpose programming language** आहे.
-
-Python चा syntax सोपा आणि readable आहे.
-
-Python चा वापर:
-- AI आणि Machine Learning
-- Data Science
-- Web Development
-- Automation
-- Software Development
-
-यासाठी केला जातो.
-
-Example:
-
-\`\`\`python
-print("Hello, World!")
-\`\`\``;
-    }
-  }
-
-
-  // ============================================================
-  // NON-ENGLISH GENERAL FALLBACK
-  // ============================================================
-
-  if (language !== 'english') {
-    return localizedFallbackResponse(userPrompt);
-  }
-
-
-  // ============================================================
-  // ENGLISH PYTHON
-  // ============================================================
-
-  if (
-    promptLower === 'what is python' ||
-    promptLower === 'what is python?' ||
-    promptLower.includes('what is python language') ||
-    promptLower.includes('define python')
-  ) {
-
-    return `## What is Python? 🐍
-
-Python is a **high-level, interpreted, general-purpose programming language** known for its simple and readable syntax.
-
-### Main features of Python:
-
-- Easy to learn and use
-- Simple and readable syntax
-- Interpreted language
-- Object-oriented programming support
-- Large collection of libraries
-- Cross-platform
-- Used in AI, Machine Learning, Data Science, Web Development, Automation, and more
-
-### Simple example:
-
-\`\`\`python
-print("Hello, World!")
-\`\`\`
-
-Output:
-
-\`\`\`
-Hello, World!
-\`\`\`
-
-Python is especially popular for beginners because its syntax is relatively easy to understand.`;
-  }
-
-
-  // ============================================================
-  // ENGLISH PYTHON LOOPS
-  // ============================================================
-
-  if (
-    promptLower.includes('python loop') ||
-    promptLower.includes('loops in python') ||
-    promptLower.includes('loop in python') ||
-    promptLower.includes('what is a loop')
-  ) {
-
-    return `## Python Loops 🔄
-
-A loop is used to repeat a block of code multiple times.
-
-Python mainly has two types of loops:
-
-### 1. for loop
-
-A for loop is used when we want to repeat something for a specific number of times.
-
-Example:
-
-\`\`\`python
-for i in range(5):
-    print(i)
-\`\`\`
-
-Output:
-
-\`\`\`
-0
-1
-2
-3
-4
-\`\`\`
-
-### 2. while loop
-
-A while loop repeats the code as long as a condition is true.
-
-Example:
-
-\`\`\`python
-i = 1
-
-while i <= 5:
-    print(i)
-    i += 1
-\`\`\`
-
-Output:
-
-\`\`\`
-1
-2
-3
-4
-5
-\`\`\`
-
-### In simple words:
-
-- for loop → repeat for a known range
-- while loop → repeat while a condition is true
-
-Loops help us avoid writing the same code again and again.`;
-  }
-
-
-  // ============================================================
-  // ENGLISH PYTHON PROGRAMMING
-  // ============================================================
-
-  if (
-    promptLower.includes('python') &&
-    (
-      promptLower.includes('program') ||
-      promptLower.includes('code') ||
-      promptLower.includes('example') ||
-      promptLower.includes('syntax')
-    )
-  ) {
-
-    return `Sure! 🐍
-
-Here is a simple Python example:
-
-\`\`\`python
-name = "Prathmesh"
-print("Hello", name)
-\`\`\`
-
-Output:
-
-\`\`\`
-Hello Prathmesh
-\`\`\`
-
-If you give me the exact Python problem, I can explain and solve it step by step.`;
-  }
-     
-  // ============================================================
-  // JAVASCRIPT QUESTIONS
-  // ============================================================
-
-  if (
-    promptLower.includes('javascript') ||
-    promptLower.includes('js code')
-  ) {
-
-    return `Here is a simple JavaScript example:
-
-\`\`\`javascript
-const name = "Prathmesh";
-
-console.log("Hello " + name);
-\`\`\`
-
-Output:
-
-\`\`\`
-Hello Prathmesh
-\`\`\``;
-  }
-
-
-  // ============================================================
-  // GENERAL CODING QUESTION
-  // ============================================================
-
-  if (
-    promptLower.includes('code') ||
-    promptLower.includes('programming')
-  ) {
-
-    return `Sure! 💻
-
-Please tell me:
-
-1. Which programming language you want
-2. What you want the program to do
-
-For example:
-
-\`\`\`
-Write a Python program to find the largest of three numbers.
-\`\`\`
-
-I'll provide the code and explain the logic.`;
-  }
-
-
-  // ============================================================
-  // DEFAULT FALLBACK
-  // ============================================================
+function getAegisFallbackResponse(userMessage) {
+  const language = detectAegisLanguage(userMessage);
 
   if (language === 'hinglish') {
-
-    return `Thank you for your message! 🤖
-
-Main Aegis AI hoon, Prathmesh Kadam ne mujhe create aur develop kiya hai.
-
-Aap apna question pucho, main Hinglish mein help karunga.`;
+    return `Bhai, abhi AI service temporarily available nahi hai. Thodi der baad dobara try kar.`;
   }
 
-
-  if (language === 'marathi') {
-
-    return `नमस्कार! 🤖
-
-मी Aegis AI आहे, मला Prathmesh Kadam यांनी तयार आणि विकसित केले आहे.
-
-तुमचा प्रश्न विचारा, मी मराठीत मदत करतो.`;
+  if (language === 'marathi' || language === 'marathi-latin') {
+    return `सध्या AI service temporarily available नाही. कृपया थोड्या वेळाने पुन्हा try करा.`;
   }
-
-
-  if (language === 'marathi-latin') {
-
-    return `Namaskar! 🤖
-
-Mi Aegis AI aahe, mala Prathmesh Kadam yanni create ani develop kela aahe.
-
-Tumcha question vichara, mi Marathi madhye help karen.`;
-  }
-
 
   if (language === 'hindi') {
-
-    return `नमस्ते! 🤖
-
-मैं Aegis AI हूँ, जिसे Prathmesh Kadam ने बनाया और विकसित किया है।
-
-आप अपना सवाल पूछिए, मैं हिंदी में मदद करूँगा।`;
+    return `अभी AI service temporarily available नहीं है। थोड़ी देर बाद फिर से try करें।`;
   }
 
-
-  // English fallback
-
-  return `Thank you for your message! 🤖
-
-I am Aegis AI, created and developed by Prathmesh Kadam.
-
-Your message has been securely processed and your conversation is saved to your account.
-
-If you want, ask me a question and I'll help you.`;
+  return `I'm sorry, but the AI service is temporarily unavailable. Please try again in a moment.`;
 }
 
-// ============================================================
-// IMAGE ANALYSIS — GEMINI VISION
-// ============================================================
+/**
+ * ============================================================
+ * WEB SEARCH RESPONSE
+ * ============================================================
+ */
 
-async function generateVisionResponse(
-  imageData,
-  imageMimeType,
-  userPrompt
-) {
+async function generateWebSearchResponse(query) {
+  if (!process.env.TAVILY_API_KEY) {
+    throw new Error('TAVILY_API_KEY is not configured.');
+  }
+
   if (!process.env.GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY is not configured.');
   }
 
-  if (!imageData) {
-    throw new Error('Image data is required.');
+  console.log('[WEB SEARCH] Searching:', query);
+
+  const searchResult = await tavilyClient.search(query, {
+    searchDepth: 'advanced',
+    maxResults: 6,
+    includeAnswer: false
+  });
+
+  const results = Array.isArray(searchResult?.results)
+    ? searchResult.results
+    : [];
+
+  if (!results.length) {
+    throw new Error('No web search results found.');
   }
 
-  const cleanMimeType =
-    imageMimeType && imageMimeType.startsWith('image/')
-      ? imageMimeType
-      : 'image/jpeg';
+  const sourcesText = results
+    .map((result, index) => {
+      return `
+SOURCE ${index + 1}
+Title: ${result.title || 'Untitled'}
+URL: ${result.url || ''}
+Content:
+${result.content || ''}
+`;
+    })
+    .join('\n');
 
-  // Remove data URL prefix if the mobile app sends:
-  // data:image/jpeg;base64,AAAA...
-  const base64Data = imageData.includes(',')
-    ? imageData.split(',')[1]
-    : imageData;
+  const language = detectAegisLanguage(query);
 
-  console.log(
-    '[VISION] 👁️ Analyzing image with Gemini Vision...'
-  );
+  const languageInstruction =
+    language === 'hinglish'
+      ? 'Answer in natural Hinglish because the user asked in Hinglish.'
+      : language === 'hindi'
+        ? 'Answer in Hindi because the user asked in Hindi.'
+        : language === 'marathi' || language === 'marathi-latin'
+          ? 'Answer in Marathi because the user asked in Marathi.'
+          : 'Answer in English because the user asked in English.';
 
-  const response = await webAI.models.generateContent({
+  const prompt = `
+You are answering a user using fresh web-search information.
+
+USER QUERY:
+${query}
+
+SEARCH RESULTS:
+${sourcesText}
+
+${languageInstruction}
+
+Instructions:
+- Answer the actual question directly.
+- Use the search results as your factual basis.
+- Do not invent facts that are not supported by the sources.
+- If sources disagree or information is uncertain, say so.
+- Prefer recent information when the question asks for latest/current information.
+- Keep the answer clear and useful.
+- Do not dump the raw search results.
+- Mention useful source URLs at the end when appropriate.
+`;
+
+  const model = webAI.models;
+
+  const response = await model.generateContent({
     model: 'gemini-3.7-flash',
-
-    contents: [
-      {
-        inlineData: {
-          mimeType: cleanMimeType,
-          data: base64Data
-        }
-      },
-      {
-        text:
-          userPrompt ||
-          'Analyze this image and explain what you can see clearly.'
-      }
-    ],
-
+    contents: prompt,
     config: {
       systemInstruction: AEGIS_SYSTEM_INSTRUCTION
     }
   });
 
-  const text =
-    response.text ||
-    response.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || '')
-      .join('');
+  const text = cleanAIText(response?.text || '');
 
-  if (!text || text.trim().length === 0) {
+  if (!text) {
+    throw new Error('Web search AI returned an empty response.');
+  }
+
+  return {
+    text,
+    sources: results.map((result) => ({
+      title: result.title || 'Source',
+      url: result.url || ''
+    }))
+  };
+}
+
+/**
+ * ============================================================
+ * IMAGE / VISION RESPONSE
+ * ============================================================
+ */
+
+async function generateVisionResponse({
+  message,
+  imageData,
+  imageMimeType = 'image/jpeg'
+}) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured.');
+  }
+
+  if (!imageData) {
+    throw new Error('Image data is missing.');
+  }
+
+  console.log('[VISION] 🖼️ Analyzing image...');
+
+  const model = webAI.models;
+
+  const prompt = `
+Analyze the image carefully and answer the user's request.
+
+User request:
+${message || 'Please analyze this image.'}
+
+Important:
+- Describe only what can reasonably be determined from the image.
+- If the user asks a question about visible content, answer it directly.
+- If the image contains a mathematical, programming, academic or technical question,
+  solve it clearly and step by step when appropriate.
+- If text is visible in the image, read it carefully.
+- Do not invent details that cannot be seen.
+- Follow the user's language.
+`;
+
+  const response = await model.generateContent({
+    model: 'gemini-3.7-flash',
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: prompt
+          },
+          {
+            inlineData: {
+              mimeType: imageMimeType,
+              data: imageData
+            }
+          }
+        ]
+      }
+    ],
+    config: {
+      systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+    }
+  });
+
+  const text = cleanAIText(response?.text || '');
+
+  if (!text) {
+    throw new Error('Vision model returned an empty response.');
+  }
+
+  console.log('[VISION] ✅ Image analysis completed.');
+
+  return text;
+}
+
+/**
+ * ============================================================
+ * FILE ANALYSIS RESPONSE
+ *
+ * Supported files:
+ * - PDF  -> sent to Gemini as inline data (application/pdf)
+ * - TXT  -> sent to Gemini as inline data (text/plain)
+ * - DOCX -> text is extracted server-side with mammoth and
+ *           passed to Gemini as text (DOCX is not accepted as
+ *           raw inline data by the Gemini API)
+ *
+ * API keys stay on the server. They are never exposed to the
+ * mobile app.
+ * ============================================================
+ */
+
+function getFileExtension(fileName) {
+  const name = String(fileName || '');
+  const dotIndex = name.lastIndexOf('.');
+
+  if (dotIndex < 0 || dotIndex === name.length - 1) {
+    return '';
+  }
+
+  return name.substring(dotIndex + 1).trim().toLowerCase();
+}
+
+function resolveFileMimeType({ fileMimeType, fileName }) {
+  const mime = String(fileMimeType || '')
+    .trim()
+    .toLowerCase();
+
+  if (SUPPORTED_FILE_MIME_TYPES.has(mime)) {
+    return mime;
+  }
+
+  return FILE_MIME_BY_EXTENSION[getFileExtension(fileName)] || '';
+}
+
+function base64ByteLength(base64) {
+  if (!base64) return 0;
+
+  const value = String(base64).trim();
+
+  if (!value) return 0;
+
+  const padding = value.endsWith('==')
+    ? 2
+    : value.endsWith('=')
+      ? 1
+      : 0;
+
+  return Math.floor((value.length * 3) / 4) - padding;
+}
+
+async function extractDocxText(fileData) {
+  const buffer = Buffer.from(fileData, 'base64');
+
+  const result = await mammoth.extractRawText({ buffer });
+
+  const text = String(result?.value || '').trim();
+
+  if (!text) {
+    throw new Error('Could not read any text from the DOCX file.');
+  }
+
+  return text;
+}
+
+async function generateFileAnalysisResponse({
+  message,
+  fileData,
+  fileMimeType,
+  fileName
+}) {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured.');
+  }
+
+  if (!fileData) {
+    throw new Error('File data is missing.');
+  }
+
+  const mimeType = resolveFileMimeType({
+    fileMimeType,
+    fileName
+  });
+
+  if (!SUPPORTED_FILE_MIME_TYPES.has(mimeType)) {
     throw new Error(
-      'Gemini Vision returned an empty response.'
+      'Unsupported file type. Supported files: PDF, TXT, DOCX.'
+    );
+  }
+
+  const fileBytes = base64ByteLength(fileData);
+
+  if (fileBytes === 0) {
+    throw new Error('The uploaded file is empty.');
+  }
+
+  if (fileBytes > MAX_FILE_SIZE_BYTES) {
+    throw new Error(
+      'File is too large. Maximum size is 8 MB.'
     );
   }
 
   console.log(
-    '[VISION] 👁️ Gemini Vision analysis succeeded.'
+    '[FILE] 📎 Analyzing file:',
+    fileName || 'uploaded file',
+    `(${mimeType})`
   );
 
-  return text.trim();
+  const prompt = `
+Analyze the attached file${fileName ? ` "${fileName}"` : ''} and answer the user's request.
+
+User request:
+${message || 'Please analyze this file.'}
+
+Important:
+- Read the file content carefully and answer only based on what is actually in the file.
+- If the file contains chapters, topics, code or questions, follow the user's instruction for those.
+- If the user asks for a summary, important points, errors, or a simple explanation, do that directly.
+- Do not invent details that are not present in the file.
+- Follow the user's language.
+`;
+
+  const parts = [{ text: prompt }];
+
+  const model = webAI.models;
+
+  if (mimeType === DOCX_MIME_TYPE) {
+    // DOCX is not accepted as raw inline data, so extract the
+    // text server-side and include it in the prompt.
+    const docxText = await extractDocxText(fileData);
+
+    parts.push({
+      text: `\n\nFile content (from "${fileName || 'document.docx'}"):\n${docxText}`
+    });
+  } else {
+    parts.push({
+      inlineData: {
+        mimeType,
+        data: fileData
+      }
+    });
+  }
+
+  const response = await model.generateContent({
+    model: 'gemini-3.7-flash',
+    contents: [
+      {
+        role: 'user',
+        parts
+      }
+    ],
+    config: {
+      systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+    }
+  });
+
+  const text = cleanAIText(response?.text || '');
+
+  if (!text) {
+    throw new Error(
+      'File analysis model returned an empty response.'
+    );
+  }
+
+  console.log('[FILE] ✅ File analysis completed.');
+
+  return text;
 }
 
 /**
  * ============================================================
- * NON-STREAMING AI RESPONSE GENERATOR WITH RETRY
+ * NORMAL AI GENERATION
+ *
+ * PRIMARY:
+ *   Nemotron 3 Ultra
+ *
+ * FALLBACK:
+ *   Gemini 3.7 Flash
+ *   Gemini 3.6 Flash
+ *   Gemini 3.5 Flash Lite
+ *
+ * FINAL:
+ *   Aegis fallback
  * ============================================================
  */
 
-async function generateWithRetry(
+async function generateWithRetry({
   genAI,
-  primaryModel,
-  chatHistory,
-  message
-) {
-  // =========================================================
-  // 🧠 PRIMARY BRAIN — NVIDIA NEMOTRON 3 ULTRA
-  // =========================================================
+  messages,
+  userMessage
+}) {
+  /**
+   * ----------------------------------------------------------
+   * PRIMARY — NVIDIA NEMOTRON 3 ULTRA
+   * ----------------------------------------------------------
+   */
 
-  if (process.env.NVIDIA_API_KEY) {
-    try {
-      console.log(
-        '[AI GENERATE] 🧠 Trying primary brain: Nemotron 3 Ultra'
-      );
+  try {
+    console.log('[AI] 🧠 Trying Nemotron 3 Ultra...');
 
-      const messages = [
-        {
-          role: 'system',
-          content: AEGIS_SYSTEM_INSTRUCTION
-        }
-      ];
+    const completion = await nvidiaAI.chat.completions.create({
+      model: 'nvidia/nemotron-3-ultra-550b-a55b',
+      messages,
+      max_tokens: 4096
+    });
 
-      // Convert Gemini-style history to OpenAI/NVIDIA format
-      if (Array.isArray(chatHistory)) {
-        for (const item of chatHistory) {
-          const text = item?.parts
-            ?.map(part => part?.text || '')
-            .join('')
-            .trim();
+    const text = cleanAIText(
+      completion?.choices?.[0]?.message?.content || ''
+    );
 
-          if (!text) continue;
-
-          messages.push({
-            role:
-              item.role === 'model'
-                ? 'assistant'
-                : 'user',
-            content: text
-          });
-        }
-      }
-
-      // Current user message
-      messages.push({
-        role: 'user',
-        content: message
-      });
-
-      const completion =
-        await nvidiaAI.chat.completions.create({
-          model:
-            'nvidia/nemotron-3-ultra-550b-a55b',
-
-          messages,
-
-          max_tokens: 4096,
-        });
-
-      const content =
-        completion.choices?.[0]?.message?.content;
-
-      if (
-        content &&
-        content.trim().length > 0
-      ) {
-        console.log(
-          '[AI GENERATE] 🧠 Nemotron 3 Ultra succeeded.'
-        );
-
-        return {
-          text: content.trim(),
-
-          response: {
-            text: () => content.trim()
-          },
-
-          model:
-            'nvidia/nemotron-3-ultra-550b-a55b'
-        };
-      }
-
-      throw new Error(
-        'Nemotron 3 Ultra returned an empty response'
-      );
-
-    } catch (nErr) {
-      console.warn(
-        '[AI GENERATE] 🧠 Nemotron 3 Ultra failed:',
-        nErr?.message || nErr
-      );
+    if (!text) {
+      throw new Error('Nemotron returned an empty response.');
     }
-  } else {
-    console.warn(
-      '[AI GENERATE] NVIDIA_API_KEY not configured. Skipping Nemotron.'
+
+    console.log('[AI] 🧠 Nemotron 3 Ultra succeeded.');
+
+    return {
+      text,
+      provider: 'nemotron'
+    };
+  } catch (nemotronError) {
+    console.error(
+      '[AI] ⚠️ Nemotron failed:',
+      nemotronError?.message || nemotronError
     );
   }
 
-  // =========================================================
-  // 🥈 GEMINI FALLBACK
-  // =========================================================
+  /**
+   * ----------------------------------------------------------
+   * FALLBACK — GEMINI
+   * ----------------------------------------------------------
+   */
+
+  if (!genAI) {
+    throw new Error(
+      'Gemini API is not configured and Nemotron failed.'
+    );
+  }
 
   const modelsToTry = [
     'gemini-3.7-flash',
@@ -1193,191 +866,150 @@ async function generateWithRetry(
     'gemini-3.5-flash-lite'
   ];
 
-  let lastError = null;
-
-  for (const currentModel of modelsToTry) {
+  for (const modelName of modelsToTry) {
     try {
-      console.log(
-        `[AI GENERATE] 🥈 Trying Gemini fallback: ${currentModel}`
-      );
+      console.log(`[AI] 🔄 Trying Gemini model: ${modelName}`);
 
-      const model = genAI.getGenerativeModel({
-        model: currentModel,
-        systemInstruction: AEGIS_SYSTEM_INSTRUCTION
-      });
+      const model = getGeminiModel(genAI, modelName);
 
-      const chatSession = model.startChat({
-        history: chatHistory || [],
+      const result = await model.generateContent({
+        contents: messages
+          .filter((item) => item.role !== 'system')
+          .map((item) => ({
+            role: item.role === 'assistant' ? 'model' : 'user',
+            parts: [
+              {
+                text: item.content
+              }
+            ]
+          })),
         generationConfig: {
           maxOutputTokens: 1024
         }
       });
 
-      const result =
-        await chatSession.sendMessage(message);
+      const text = cleanAIText(
+        result?.response?.text?.() || ''
+      );
 
-      const response = await result.response;
-
-      const text = response.text();
-
-      if (
-        text &&
-        text.trim().length > 0
-      ) {
-        console.log(
-          `[AI GENERATE] 🥈 Gemini ${currentModel} succeeded.`
+      if (!text) {
+        throw new Error(
+          `${modelName} returned an empty response.`
         );
-
-        return {
-          text: text.trim(),
-          response,
-          model: currentModel
-        };
       }
 
-      throw new Error(
-        `${currentModel} returned empty response`
+      console.log(`[AI] ✅ ${modelName} succeeded.`);
+
+      return {
+        text,
+        provider: modelName
+      };
+    } catch (geminiError) {
+      console.error(
+        `[AI] ⚠️ ${modelName} failed:`,
+        geminiError?.message || geminiError
       );
-
-    } catch (err) {
-      lastError = err;
-
-      console.warn(
-        `[AI GENERATE] 🥈 Gemini ${currentModel} failed:`,
-        err?.message || err
-      );
-
-      continue;
     }
   }
 
-  // =========================================================
-  // ❌ ALL AI PROVIDERS FAILED
-  // =========================================================
+  /**
+   * ----------------------------------------------------------
+   * FINAL FALLBACK
+   * ----------------------------------------------------------
+   */
 
-  throw (
-    lastError ||
-    new Error(
-      'All configured AI models are currently unavailable.'
-    )
-  );
+  console.log('[AI] 🛡️ Using Aegis fallback response.');
+
+  return {
+    text: getAegisFallbackResponse(userMessage),
+    provider: 'aegis-fallback'
+  };
 }
 
 /**
  * ============================================================
- * STREAMING AI RESPONSE GENERATOR
+ * STREAMING AI GENERATION
+ *
+ * PRIMARY:
+ *   Nemotron 3 Ultra
+ *
+ * FALLBACK:
+ *   Gemini models
+ *
+ * FINAL:
+ *   Aegis fallback
  * ============================================================
  */
 
-async function streamWithRetry(
+async function streamWithRetry({
   genAI,
-  modelName,
-  chatHistory,
-  message,
-  sendEvent
-) {
-  // =========================================================
-  // 🧠 PRIMARY BRAIN — NVIDIA NEMOTRON 3 ULTRA
-  // =========================================================
+  messages,
+  userMessage,
+  onChunk
+}) {
+  /**
+   * ----------------------------------------------------------
+   * PRIMARY — NEMOTRON 3 ULTRA STREAM
+   * ----------------------------------------------------------
+   */
 
-  if (process.env.NVIDIA_API_KEY) {
-    try {
-      console.log(
-        '[AI STREAM] 🧠 Trying primary brain: Nemotron 3 Ultra'
-      );
+  try {
+    console.log('[AI STREAM] 🧠 Trying Nemotron 3 Ultra...');
 
-      const messages = [
-        {
-          role: 'system',
-          content: AEGIS_SYSTEM_INSTRUCTION
-        }
-      ];
+    const stream = await nvidiaAI.chat.completions.create({
+      model: 'nvidia/nemotron-3-ultra-550b-a55b',
+      messages,
+      max_tokens: 4096,
+      stream: true
+    });
 
-      // Convert Gemini-style history to NVIDIA/OpenAI format
-      if (Array.isArray(chatHistory)) {
-        for (const item of chatHistory) {
-          const text = item?.parts
-            ?.map(part => part?.text || '')
-            .join('')
-            .trim();
+    let fullText = '';
 
-          if (!text) continue;
+    for await (const chunk of stream) {
+      const delta =
+        chunk?.choices?.[0]?.delta?.content || '';
 
-          messages.push({
-            role:
-              item.role === 'model'
-                ? 'assistant'
-                : 'user',
-            content: text
-          });
-        }
+      if (!delta) continue;
+
+      fullText += delta;
+
+      if (typeof onChunk === 'function') {
+        onChunk(delta);
       }
+    }
 
-      // Current user message
-      messages.push({
-        role: 'user',
-        content: message
-      });
+    fullText = cleanAIText(fullText);
 
-      const stream =
-        await nvidiaAI.chat.completions.create({
-          model:
-            'nvidia/nemotron-3-ultra-550b-a55b',
-
-          messages,
-
-          max_tokens: 4096,
-
-          stream: true,
-
-        });
-
-      let fullText = '';
-
-      for await (const chunk of stream) {
-        const content =
-          chunk.choices?.[0]?.delta?.content;
-
-        if (content) {
-          fullText += content;
-
-          sendEvent('token', {
-            content
-          });
-        }
-      }
-
-      if (fullText.trim().length > 0) {
-        console.log(
-          '[AI STREAM] 🧠 Nemotron 3 Ultra succeeded.'
-        );
-
-        return {
-          text: fullText.trim(),
-          model:
-            'nvidia/nemotron-3-ultra-550b-a55b'
-        };
-      }
-
+    if (!fullText) {
       throw new Error(
-        'Nemotron 3 Ultra returned empty stream'
-      );
-
-    } catch (nErr) {
-      console.warn(
-        '[AI STREAM] 🧠 Nemotron 3 Ultra failed:',
-        nErr?.message || nErr
+        'Nemotron streaming returned an empty response.'
       );
     }
-  } else {
-    console.warn(
-      '[AI STREAM] NVIDIA_API_KEY not configured. Skipping Nemotron.'
+
+    console.log('[AI STREAM] 🧠 Nemotron 3 Ultra succeeded.');
+
+    return {
+      text: fullText,
+      provider: 'nemotron'
+    };
+  } catch (nemotronError) {
+    console.error(
+      '[AI STREAM] ⚠️ Nemotron failed:',
+      nemotronError?.message || nemotronError
     );
   }
 
-  // =========================================================
-  // 🥈 GEMINI FALLBACK
-  // =========================================================
+  /**
+   * ----------------------------------------------------------
+   * FALLBACK — GEMINI STREAM
+   * ----------------------------------------------------------
+   */
+
+  if (!genAI) {
+    throw new Error(
+      'Gemini API is not configured and Nemotron failed.'
+    );
+  }
 
   const modelsToTry = [
     'gemini-3.7-flash',
@@ -1385,624 +1017,1082 @@ async function streamWithRetry(
     'gemini-3.5-flash-lite'
   ];
 
-  let lastError = null;
-
-  for (const currentModel of modelsToTry) {
+  for (const modelName of modelsToTry) {
     try {
       console.log(
-        `[AI STREAM] 🥈 Trying Gemini fallback: ${currentModel}`
+        `[AI STREAM] 🔄 Trying Gemini model: ${modelName}`
       );
 
-      const model = genAI.getGenerativeModel({
-        model: currentModel,
-        systemInstruction: AEGIS_SYSTEM_INSTRUCTION
-      });
+      const model = getGeminiModel(genAI, modelName);
 
-      const chatSession = model.startChat({
-        history: chatHistory || [],
+      const contents = messages
+        .filter((item) => item.role !== 'system')
+        .map((item) => ({
+          role: item.role === 'assistant' ? 'model' : 'user',
+          parts: [
+            {
+              text: item.content
+            }
+          ]
+        }));
+
+      const result = await model.generateContentStream({
+        contents,
         generationConfig: {
           maxOutputTokens: 1024
         }
       });
-
-      const result =
-        await chatSession.sendMessageStream(message);
 
       let fullText = '';
 
       for await (const chunk of result.stream) {
-        const text = chunk.text();
+        const delta = chunk?.text?.() || '';
 
-        if (text) {
-          fullText += text;
+        if (!delta) continue;
 
-          sendEvent('token', {
-            content: text
+        fullText += delta;
+
+        if (typeof onChunk === 'function') {
+          onChunk(delta);
+        }
+      }
+
+      fullText = cleanAIText(fullText);
+
+      if (!fullText) {
+        throw new Error(
+          `${modelName} returned an empty streaming response.`
+        );
+      }
+
+      console.log(
+        `[AI STREAM] ✅ ${modelName} succeeded.`
+      );
+
+      return {
+        text: fullText,
+        provider: modelName
+      };
+    } catch (geminiError) {
+      console.error(
+        `[AI STREAM] ⚠️ ${modelName} failed:`,
+        geminiError?.message || geminiError
+      );
+    }
+  }
+
+  /**
+   * ----------------------------------------------------------
+   * FINAL STREAM FALLBACK
+   * ----------------------------------------------------------
+   */
+
+  const fallbackText =
+    getAegisFallbackResponse(userMessage);
+
+  if (typeof onChunk === 'function') {
+    onChunk(fallbackText);
+  }
+
+  return {
+    text: fallbackText,
+    provider: 'aegis-fallback'
+  };
+}
+/**
+ * ============================================================
+ * POST /api/chat
+ * NORMAL NON-STREAMING CHAT
+ * ============================================================
+ */
+
+router.post('/', async (req, res) => {
+  try {
+    const {
+      conversationId,
+      message,
+      imageData,
+      imageMimeType,
+      fileData,
+      fileMimeType,
+      fileName
+    } = req.body;
+
+    const cleanMessage =
+      typeof message === 'string'
+        ? message.trim()
+        : '';
+
+    if (!cleanMessage && !imageData && !fileData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Message, image or file is required.'
+      });
+    }
+
+    /**
+     * --------------------------------------------------------
+     * FILE VALIDATION
+     * --------------------------------------------------------
+     */
+
+    if (fileData) {
+      const resolvedMimeType = resolveFileMimeType({
+        fileMimeType,
+        fileName
+      });
+
+      if (!SUPPORTED_FILE_MIME_TYPES.has(resolvedMimeType)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'Unsupported file type. Supported files: PDF, TXT, DOCX.'
+        });
+      }
+
+      const fileBytes = base64ByteLength(fileData);
+
+      if (fileBytes === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'The uploaded file is empty.'
+        });
+      }
+
+      if (fileBytes > MAX_FILE_SIZE_BYTES) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'File is too large. Maximum size is 8 MB.'
+        });
+      }
+    }
+
+    const userId = req.user.id;
+
+    console.log(
+      `[CHAT] User ${userId} sent a message`
+    );
+
+    /**
+     * --------------------------------------------------------
+     * CONVERSATION
+     * --------------------------------------------------------
+     */
+
+    let activeConversationId = conversationId;
+
+    if (!activeConversationId) {
+      const titleSource =
+        cleanMessage ||
+        (fileData
+          ? 'File Analysis'
+          : 'Image Analysis');
+
+      const title =
+        titleSource.length > 60
+          ? `${titleSource.substring(0, 57)}...`
+          : titleSource;
+
+      const conversation =
+        await conversationQueries.create(
+          uuidv4(),
+          userId,
+          title
+        );
+
+      activeConversationId =
+        conversation.id;
+
+      console.log(
+        `[CHAT] Created conversation ${activeConversationId}`
+      );
+    } else {
+      /**
+       * Make sure the conversation belongs
+       * to the authenticated user.
+       */
+
+      const conversation =
+        await conversationQueries.findById(
+          activeConversationId,
+          userId
+        );
+
+      if (!conversation) {
+        return res.status(404).json({
+          success: false,
+          error: 'Conversation not found.'
+        });
+      }
+    }
+
+    /**
+     * --------------------------------------------------------
+     * SAVE USER MESSAGE
+     * --------------------------------------------------------
+     */
+
+    const userMessageText =
+      cleanMessage ||
+      (imageData
+        ? 'Please analyze this image.'
+        : fileName
+          ? `Please analyze the attached file ${fileName}.`
+          : 'Please analyze this file.');
+
+    const savedUserMessage =
+      await messageQueries.create(
+        activeConversationId,
+        'user',
+        userMessageText
+      );
+
+    console.log(
+      `[CHAT] Saved user message ${savedUserMessage.id}`
+    );
+
+    /**
+     * --------------------------------------------------------
+     * BUILD CONVERSATION HISTORY
+     * --------------------------------------------------------
+     */
+
+    const history =
+      await messageQueries.findByConversation(
+        activeConversationId
+      );
+
+    const recentHistory =
+      Array.isArray(history)
+        ? history.slice(-20)
+        : [];
+
+    const messages = [
+      {
+        role: 'system',
+        content: AEGIS_SYSTEM_INSTRUCTION
+      },
+      ...recentHistory.map((item) => ({
+        role:
+          item.role === 'assistant'
+            ? 'assistant'
+            : 'user',
+        content: item.content || ''
+      }))
+    ];
+
+    /**
+     * --------------------------------------------------------
+     * AI CONFIGURATION
+     * --------------------------------------------------------
+     */
+
+    const geminiApiKey =
+      process.env.GEMINI_API_KEY;
+
+    const genAI = geminiApiKey
+      ? new GoogleGenerativeAI(
+          geminiApiKey
+        )
+      : null;
+
+    /**
+     * --------------------------------------------------------
+     * WEB SEARCH DETECTION
+     * --------------------------------------------------------
+     */
+
+    const needsWebSearch =
+      !fileData &&
+      !imageData &&
+      /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(
+        cleanMessage
+      );
+
+    let aiText = '';
+    let provider = 'unknown';
+    let sources = [];
+
+    /**
+     * --------------------------------------------------------
+     * IMAGE HAS HIGHEST PRIORITY
+     * --------------------------------------------------------
+     */
+
+    if (fileData) {
+      console.log(
+        '[CHAT] 📎 File request detected.'
+      );
+
+      aiText =
+        await generateFileAnalysisResponse({
+          message:
+            cleanMessage ||
+            'Please analyze this file.',
+          fileData,
+          fileMimeType,
+          fileName: fileName || 'uploaded file'
+        });
+
+      provider = 'gemini-file';
+    }
+
+    else if (imageData) {
+      console.log(
+        '[CHAT] 🖼️ Image request detected.'
+      );
+
+      aiText =
+        await generateVisionResponse({
+          message:
+            cleanMessage ||
+            'Please analyze this image.',
+          imageData,
+          imageMimeType:
+            imageMimeType || 'image/jpeg'
+        });
+
+      provider = 'gemini-vision';
+    }
+
+    /**
+     * --------------------------------------------------------
+     * WEB SEARCH
+     * --------------------------------------------------------
+     */
+
+    else if (needsWebSearch) {
+      console.log(
+        '[CHAT] 🌐 Web search request detected.'
+      );
+
+      try {
+        const webResponse =
+          await generateWebSearchResponse(
+            cleanMessage
+          );
+
+        aiText =
+          webResponse.text;
+
+        sources =
+          webResponse.sources || [];
+
+        provider = 'web-search';
+      } catch (webError) {
+        console.error(
+          '[CHAT] ⚠️ Web search failed:',
+          webError?.message ||
+            webError
+        );
+
+        /**
+         * If web search fails, continue with
+         * normal AI instead of returning an error.
+         */
+
+        const result =
+          await generateWithRetry({
+            genAI,
+            messages,
+            userMessage:
+              cleanMessage
+          });
+
+        aiText =
+          result.text;
+
+        provider =
+          result.provider;
+      }
+    }
+
+    /**
+     * --------------------------------------------------------
+     * NORMAL AI CHAT
+     * --------------------------------------------------------
+     */
+
+    else {
+      const result =
+        await generateWithRetry({
+          genAI,
+          messages,
+          userMessage:
+            cleanMessage
+        });
+
+      aiText =
+        result.text;
+
+      provider =
+        result.provider;
+    }
+
+    /**
+     * --------------------------------------------------------
+     * SAFETY CHECK
+     * --------------------------------------------------------
+     */
+
+    if (!aiText) {
+      aiText =
+        getAegisFallbackResponse(
+          cleanMessage
+        );
+
+      provider =
+        'aegis-fallback';
+    }
+
+    /**
+     * --------------------------------------------------------
+     * SAVE ASSISTANT MESSAGE
+     * --------------------------------------------------------
+     */
+
+    const savedAssistantMessage =
+      await messageQueries.create(
+        activeConversationId,
+        'assistant',
+        aiText
+      );
+
+    console.log(
+      `[CHAT] Saved assistant message ${savedAssistantMessage.id}`
+    );
+
+    /**
+     * --------------------------------------------------------
+     * UPDATE CONVERSATION
+     * --------------------------------------------------------
+     */
+
+    try {
+      if (
+        typeof conversationQueries.updateTimestamp ===
+        'function'
+      ) {
+        await conversationQueries.updateTimestamp(
+          activeConversationId
+        );
+      }
+    } catch (timestampError) {
+      console.error(
+        '[CHAT] ⚠️ Failed to update conversation timestamp:',
+        timestampError?.message ||
+          timestampError
+      );
+    }
+
+    /**
+     * --------------------------------------------------------
+     * RESPONSE
+     * --------------------------------------------------------
+     */
+
+    return res.json({
+      success: true,
+
+      conversationId:
+        activeConversationId,
+
+      message: {
+        id:
+          savedAssistantMessage.id,
+        role: 'assistant',
+        content: aiText
+      },
+
+      provider,
+
+      sources
+    });
+  } catch (error) {
+    console.error(
+      '[CHAT ERROR]',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        'Failed to generate AI response.'
+    });
+  }
+});
+
+
+/**
+ * ============================================================
+ * GET /api/chat/:conversationId
+ * GET CONVERSATION MESSAGES
+ * ============================================================
+ */
+
+router.get(
+  '/:conversationId',
+  async (req, res) => {
+    try {
+      const {
+        conversationId
+      } = req.params;
+
+      const userId =
+        req.user.id;
+
+      const conversation =
+        await conversationQueries.findById(
+          conversationId,
+          userId
+        );
+
+      if (!conversation) {
+        return res.status(404).json({
+          success: false,
+          error:
+            'Conversation not found.'
+        });
+      }
+
+      const messages =
+        await messageQueries.findByConversation(
+          conversationId
+        );
+
+      return res.json({
+        success: true,
+        conversation,
+        messages
+      });
+    } catch (error) {
+      console.error(
+        '[GET CONVERSATION ERROR]',
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        error:
+          error?.message ||
+          'Failed to load conversation.'
+      });
+    }
+  }
+);
+
+
+/**
+ * ============================================================
+ * DELETE /api/chat/:conversationId
+ * DELETE CONVERSATION
+ * ============================================================
+ */
+
+router.delete(
+  '/:conversationId',
+  async (req, res) => {
+    try {
+      const {
+        conversationId
+      } = req.params;
+
+      const userId =
+        req.user.id;
+
+      const conversation =
+        await conversationQueries.findById(
+          conversationId,
+          userId
+        );
+
+      if (!conversation) {
+        return res.status(404).json({
+          success: false,
+          error:
+            'Conversation not found.'
+        });
+      }
+
+      await conversationQueries.delete(
+        conversationId,
+        userId
+      );
+
+      return res.json({
+        success: true,
+        message:
+          'Conversation deleted successfully.'
+      });
+    } catch (error) {
+      console.error(
+        '[DELETE CONVERSATION ERROR]',
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        error:
+          error?.message ||
+          'Failed to delete conversation.'
+      });
+    }
+  }
+);
+
+
+/**
+ * ============================================================
+ * POST /api/chat/stream
+ * STREAMING CHAT
+ * ============================================================
+ */
+
+router.post(
+  '/stream',
+  async (req, res) => {
+    try {
+      const {
+        conversationId,
+        message,
+        imageData,
+        imageMimeType
+      } = req.body;
+
+      const cleanMessage =
+        typeof message === 'string'
+          ? message.trim()
+          : '';
+
+      if (!cleanMessage && !imageData) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'Message or image is required.'
+        });
+      }
+
+      const userId =
+        req.user.id;
+
+      console.log(
+        `[AI STREAM] User ${userId} started streaming`
+      );
+
+      /**
+       * ------------------------------------------------------
+       * CONVERSATION
+       * ------------------------------------------------------
+       */
+
+      let activeConversationId =
+        conversationId;
+
+      if (!activeConversationId) {
+        const titleSource =
+          cleanMessage ||
+          'Image Analysis';
+
+        const title =
+          titleSource.length > 60
+            ? `${titleSource.substring(0, 57)}...`
+            : titleSource;
+
+        const conversation =
+          await conversationQueries.create(
+            uuidv4(),
+            userId,
+            title
+          );
+
+        activeConversationId =
+          conversation.id;
+      } else {
+        const conversation =
+          await conversationQueries.findById(
+            activeConversationId,
+            userId
+          );
+
+        if (!conversation) {
+          return res.status(404).json({
+            success: false,
+            error:
+              'Conversation not found.'
           });
         }
       }
 
-      if (fullText.trim().length > 0) {
-        console.log(
-          `[AI STREAM] 🥈 Gemini ${currentModel} succeeded.`
+      /**
+       * ------------------------------------------------------
+       * SAVE USER MESSAGE
+       * ------------------------------------------------------
+       */
+
+      const userMessageText =
+        cleanMessage ||
+        'Please analyze this image.';
+
+      await messageQueries.create(
+        activeConversationId,
+        'user',
+        userMessageText
+      );
+
+      /**
+       * ------------------------------------------------------
+       * LOAD HISTORY
+       * ------------------------------------------------------
+       */
+
+      const history =
+        await messageQueries.findByConversation(
+          activeConversationId
         );
 
-        return {
-          text: fullText.trim(),
-          model: currentModel
-        };
-      }
+      const recentHistory =
+        Array.isArray(history)
+          ? history.slice(-20)
+          : [];
 
-      throw new Error(
-        `${currentModel} returned empty stream`
+      const messages = [
+        {
+          role: 'system',
+          content:
+            AEGIS_SYSTEM_INSTRUCTION
+        },
+        ...recentHistory.map(
+          (item) => ({
+            role:
+              item.role === 'assistant'
+                ? 'assistant'
+                : 'user',
+            content:
+              item.content || ''
+          })
+        )
+      ];
+
+      /**
+       * ------------------------------------------------------
+       * GEMINI CONFIG
+       * ------------------------------------------------------
+       */
+
+      const geminiApiKey =
+        process.env.GEMINI_API_KEY;
+
+      const genAI =
+        geminiApiKey
+          ? new GoogleGenerativeAI(
+              geminiApiKey
+            )
+          : null;
+
+      /**
+       * ------------------------------------------------------
+       * RESPONSE HEADERS
+       * ------------------------------------------------------
+       */
+
+      res.status(200);
+
+      res.setHeader(
+        'Content-Type',
+        'text/event-stream'
       );
 
+      res.setHeader(
+        'Cache-Control',
+        'no-cache, no-transform'
+      );
+
+      res.setHeader(
+        'Connection',
+        'keep-alive'
+      );
+
+      res.setHeader(
+        'X-Accel-Buffering',
+        'no'
+      );
+
+      if (
+        typeof res.flushHeaders ===
+        'function'
+      ) {
+        res.flushHeaders();
+      }
+
+      /**
+       * ------------------------------------------------------
+       * SEND SSE EVENT
+       * ------------------------------------------------------
+       */
+
+      const sendEvent = (
+        event,
+        data
+      ) => {
+        res.write(
+          `event: ${event}\n`
+        );
+
+        res.write(
+          `data: ${JSON.stringify(
+            data
+          )}\n\n`
+        );
+      };
+
+      /**
+       * ------------------------------------------------------
+       * IMAGE STREAM
+       * ------------------------------------------------------
+       */
+
+      if (imageData) {
+        console.log(
+          '[AI STREAM] 🖼️ Image analysis request.'
+        );
+
+        try {
+          const aiText =
+            await generateVisionResponse({
+              message:
+                cleanMessage ||
+                'Please analyze this image.',
+              imageData,
+              imageMimeType:
+                imageMimeType ||
+                'image/jpeg'
+            });
+
+          sendEvent(
+            'chunk',
+            {
+              content: aiText
+            }
+          );
+
+          await messageQueries.create(
+            activeConversationId,
+            'assistant',
+            aiText
+          );
+
+          sendEvent(
+            'done',
+            {
+              conversationId:
+                activeConversationId,
+              provider:
+                'gemini-vision'
+            }
+          );
+
+          return res.end();
+        } catch (visionError) {
+          console.error(
+            '[AI STREAM] Vision error:',
+            visionError
+          );
+
+          sendEvent(
+            'error',
+            {
+              message:
+                visionError?.message ||
+                'Image analysis failed.'
+            }
+          );
+
+          return res.end();
+        }
+      }
+
+      /**
+       * ------------------------------------------------------
+       * WEB SEARCH STREAM
+       * ------------------------------------------------------
+       */
+
+      const needsWebSearch =
+        /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(
+          cleanMessage
+        );
+
+      if (needsWebSearch) {
+        console.log(
+          '[AI STREAM] 🌐 Web search request detected.'
+        );
+
+        try {
+          const webResponse =
+            await generateWebSearchResponse(
+              cleanMessage
+            );
+
+          sendEvent(
+            'chunk',
+            {
+              content:
+                webResponse.text
+            }
+          );
+
+          await messageQueries.create(
+            activeConversationId,
+            'assistant',
+            webResponse.text
+          );
+
+          sendEvent(
+            'done',
+            {
+              conversationId:
+                activeConversationId,
+              provider:
+                'web-search',
+              sources:
+                webResponse.sources || []
+            }
+          );
+
+          return res.end();
+        } catch (webError) {
+          console.error(
+            '[AI STREAM] ⚠️ Web search failed:',
+            webError?.message ||
+              webError
+          );
+
+          /**
+           * Continue with normal AI
+           * if web search fails.
+           */
+        }
+      }
+
+      /**
+       * ------------------------------------------------------
+       * NORMAL STREAM
+       * ------------------------------------------------------
+       */
+
+      let streamedText = '';
+
+      const result =
+        await streamWithRetry({
+          genAI,
+          messages,
+          userMessage:
+            cleanMessage,
+          onChunk: (chunk) => {
+            streamedText += chunk;
+
+            sendEvent(
+              'chunk',
+              {
+                content: chunk
+              }
+            );
+          }
+        });
+
+      /**
+       * ------------------------------------------------------
+       * SAVE COMPLETE ASSISTANT MESSAGE
+       * ------------------------------------------------------
+       */
+
+      const finalText =
+        cleanAIText(
+          streamedText ||
+            result.text ||
+            ''
+        );
+
+      if (!finalText) {
+        throw new Error(
+          'AI returned an empty response.'
+        );
+      }
+
+      await messageQueries.create(
+        activeConversationId,
+        'assistant',
+        finalText
+      );
+
+      /**
+       * ------------------------------------------------------
+       * DONE EVENT
+       * ------------------------------------------------------
+       */
+
+      sendEvent(
+        'done',
+        {
+          conversationId:
+            activeConversationId,
+
+          provider:
+            result.provider
+        }
+      );
+
+      return res.end();
     } catch (error) {
-      lastError = error;
-
-      console.warn(
-        `[AI STREAM] 🥈 Gemini ${currentModel} failed:`,
-        error?.message || error
+      console.error(
+        '[AI STREAM ERROR]',
+        error
       );
 
-      continue;
-    }
-  }
-
-  // =========================================================
-  // ❌ ALL AI PROVIDERS FAILED
-  // =========================================================
-
-  throw (
-    lastError ||
-    new Error(
-      'All configured AI models are currently unavailable.'
-    )
-  );
-}
-
-// ============================================================
-// POST /api/chat (EXISTING - NON-STREAMING)
-// ============================================================
-
-router.post('/', async (req, res) => {
-  try {
-    let {
-  conversationId,
-  message,
-  imageData,
-  imageMimeType
-} = req.body;
-
-    // ========================================================
-    // 1. VALIDATE MESSAGE
-    // ========================================================
-
-    if (
-  (!message ||
-    typeof message !== 'string' ||
-    message.trim().length === 0) &&
-  !imageData
-) {
-  return res.status(400).json({
-    success: false,
-    error: 'Message or image is required.'
-  });
-}
-
-    const cleanMessage =
-  typeof message === 'string'
-    ? message.trim()
-    : 'Please analyze this image.';
-    let webSources = [];
-
-    // ========================================================
-    // 2. CREATE / VERIFY CONVERSATION
-    // ========================================================
-
-    let isNewConversation = false;
-
-    if (!conversationId) {
-      conversationId = uuidv4();
-
-      const initialTitle = cleanMessage.length > 40
-        ? `${cleanMessage.substring(0, 40)}...`
-        : cleanMessage;
-
-      await conversationQueries.create(
-        conversationId,
-        req.user.id,
-        initialTitle
-      );
-
-      isNewConversation = true;
-    } else {
-      const existingConv = await conversationQueries.getByIdAndUser(
-        conversationId,
-        req.user.id
-      );
-
-      if (!existingConv) {
-        return res.status(404).json({
+      if (!res.headersSent) {
+        return res.status(500).json({
           success: false,
-          error: 'Conversation not found or access denied.'
+          error:
+            error?.message ||
+            'Streaming failed.'
         });
       }
-    }
 
-    // ========================================================
-    // 3. SAVE USER MESSAGE
-    // ========================================================
-
-    const userMsgResult = await messageQueries.add(
-      conversationId,
-      'user',
-      cleanMessage
-    );
-
-    await conversationQueries.touchUpdatedAt(conversationId);
-
-    // ========================================================
-    // 4. GET CONVERSATION HISTORY
-    // ========================================================
-
-    const recentMessages = (
-      await messageQueries.getRecentContext(conversationId, 20)
-    ).reverse();
-
-    // ========================================================
-    // 5. GENERATE AI RESPONSE
-    // ========================================================
-
-    let assistantResponseText = '';
-
-    const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
-
-    if (geminiApiKey) {
       try {
-        const genAI = new GoogleGenerativeAI(geminiApiKey);
+        res.write(
+          `event: error\n`
+        );
 
-        // ====================================================
-        // Build Gemini history
-        // ====================================================
+        res.write(
+          `data: ${JSON.stringify({
+            message:
+              error?.message ||
+              'Streaming failed.'
+          })}\n\n`
+        );
 
-        const historyForGemini = [];
-        let expectedRole = 'user';
+        res.end();
+      } catch (streamError) {
+        console.error(
+          '[AI STREAM CLOSE ERROR]',
+          streamError
+        );
 
-        for (const m of recentMessages.slice(0, -1)) {
-          const role = m.role === 'assistant' ? 'model' : 'user';
-
-          if (role === expectedRole) {
-            historyForGemini.push({
-              role,
-              parts: [{ text: m.content }]
-            });
-
-            expectedRole = expectedRole === 'user' ? 'model' : 'user';
-          }
-        }
-
-        // ====================================================
-        // Decide whether web search is needed
-        // ====================================================
-
-        const needsWebSearch = /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(cleanMessage);
-
-        // ====================================================
-        // WEB SEARCH
-        // ====================================================
-
-        if (needsWebSearch) {
-          console.log('[WEB SEARCH] Using web search for:', cleanMessage);
-
-          const webResult = await generateWebSearchResponse(cleanMessage);
-          assistantResponseText = webResult.text;
-          webSources = webResult.sources || [];
-        } else {
-          // ==================================================
-          // NORMAL AI RESPONSE
-          // ==================================================
-
-          // ========================================================
-// IMAGE ANALYSIS
-// ========================================================
-
-if (imageData) {
-  console.log(
-    '[VISION] 📸 Image received. Starting image analysis...'
-  );
-
-  assistantResponseText =
-    await generateVisionResponse(
-      imageData,
-      imageMimeType,
-      cleanMessage
-    );
-} else {
-  // ======================================================
-  // NORMAL AI RESPONSE
-  // ======================================================
-
-  const result = await generateWithRetry(
-    genAI,
-    'gemini-3.5-flash',
-    historyForGemini,
-    cleanMessage
-  );
-
-  assistantResponseText = result.text;
-}
-        }
-
-        // ====================================================
-        // Safety check
-        // ====================================================
-
-        if (!assistantResponseText || assistantResponseText.trim().length === 0) {
-          throw new Error('AI returned an empty response.');
-        }
-
-      } catch (aiErr) {
-        console.warn('[AI] Gemini error. Using Aegis fallback:', aiErr.message);
-        assistantResponseText = generateFallbackResponse(cleanMessage, recentMessages);
+        try {
+          res.end();
+        } catch {}
       }
-    } else {
-      // ======================================================
-      // GEMINI API KEY NOT CONFIGURED
-      // ======================================================
-
-      console.warn('[AI] GEMINI_API_KEY is not configured.');
-      assistantResponseText = generateFallbackResponse(cleanMessage, recentMessages);
     }
-
-    // ========================================================
-    // 6. SAVE ASSISTANT RESPONSE
-    // ========================================================
-
-    const assistantMsgResult = await messageQueries.add(
-      conversationId,
-      'assistant',
-      assistantResponseText
-    );
-
-    await conversationQueries.touchUpdatedAt(conversationId);
-
-    // ========================================================
-    // 7. UPDATE CONVERSATION TITLE
-    // ========================================================
-
-    let updatedTitle = null;
-
-    const currentConv = await conversationQueries.getByIdAndUser(
-      conversationId,
-      req.user.id
-    );
-
-    if (
-      currentConv &&
-      (
-        currentConv.title === 'New Conversation' ||
-        isNewConversation
-      )
-    ) {
-      const generatedTitle = cleanMessage.length > 40
-        ? `${cleanMessage.substring(0, 40)}...`
-        : cleanMessage;
-
-      await conversationQueries.updateTitle(
-        generatedTitle,
-        conversationId,
-        req.user.id
-      );
-
-      updatedTitle = generatedTitle;
-    }
-
-    // ========================================================
-    // 8. SEND RESPONSE TO FRONTEND
-    // ========================================================
-
-    return res.json({
-      success: true,
-      conversationId,
-      updatedTitle,
-      userMessage: {
-        id: userMsgResult.id,
-        conversation_id: conversationId,
-        role: 'user',
-        content: cleanMessage,
-        created_at: userMsgResult.created_at || new Date().toISOString()
-      },
-      assistantMessage: {
-        id: assistantMsgResult.id,
-        conversation_id: conversationId,
-        role: 'assistant',
-        content: assistantResponseText,
-        sources: webSources,
-        created_at: assistantMsgResult.created_at || new Date().toISOString()
-      }
-    });
-
-  } catch (err) {
-    console.error('Chat endpoint error:', err);
-    return res.status(500).json({
-      success: false,
-      error: 'An error occurred while processing your message.'
-    });
   }
-});
+);
 
 
-// ============================================================
-// POST /api/chat/stream (NEW - STREAMING ENDPOINT)
-// ============================================================
-
-router.post('/stream', async (req, res) => {
-  // Set SSE headers
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  const sendEvent = (type, data) => {
-    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-  };
-
-  const sendError = (message, recoverable = false) => {
-    sendEvent('error', { message, recoverable });
-  };
-
-  const sendDone = (conversationId, messageId) => {
-    sendEvent('done', { conversationId, messageId });
-  };
-
-  try {
-    let {
-  conversationId,
-  message,
-  imageData,
-  imageMimeType
-} = req.body;
-
-    // 1. VALIDATE MESSAGE
-    if (
-  (!message ||
-    typeof message !== 'string' ||
-    message.trim().length === 0) &&
-  !imageData
-) {
-  sendError(
-    'Message or image is required.',
-    false
-  );
-
-  return res.end();
-}
-
-    const cleanMessage =
-  typeof message === 'string'
-    ? message.trim()
-    : 'Please analyze this image.';
-    let webSources = [];
-    let isNewConversation = false;
-
-    // 2. CREATE / VERIFY CONVERSATION
-    if (!conversationId) {
-      conversationId = uuidv4();
-      const initialTitle = cleanMessage.length > 40
-        ? `${cleanMessage.substring(0, 40)}...`
-        : cleanMessage;
-
-      await conversationQueries.create(conversationId, req.user.id, initialTitle);
-      isNewConversation = true;
-    } else {
-      const existingConv = await conversationQueries.getByIdAndUser(conversationId, req.user.id);
-      if (!existingConv) {
-        sendError('Conversation not found or access denied.', false);
-        return res.end();
-      }
-    }
-
-    // 3. SAVE USER MESSAGE
-    const userMsgResult = await messageQueries.add(conversationId, 'user', cleanMessage);
-    await conversationQueries.touchUpdatedAt(conversationId);
-
-    // Send user message confirmation
-    sendEvent('user_message', {
-      id: userMsgResult.id,
-      conversation_id: conversationId,
-      role: 'user',
-      content: cleanMessage,
-      created_at: userMsgResult.created_at || new Date().toISOString()
-    });
-
-    // 4. GET CONVERSATION HISTORY
-    const recentMessages = (
-      await messageQueries.getRecentContext(conversationId, 20)
-    ).reverse();
-
-    // 5. GENERATE AI RESPONSE (STREAMING)
-    let assistantResponseText = '';
-    let assistantMessageId = null;
-
-    const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
-
-    if (geminiApiKey) {
-      try {
-        const genAI = new GoogleGenerativeAI(geminiApiKey);
-
-        // Build Gemini history
-        const historyForGemini = [];
-        let expectedRole = 'user';
-
-        for (const m of recentMessages.slice(0, -1)) {
-          const role = m.role === 'assistant' ? 'model' : 'user';
-          if (role === expectedRole) {
-            historyForGemini.push({
-              role,
-              parts: [{ text: m.content }]
-            });
-            expectedRole = expectedRole === 'user' ? 'model' : 'user';
-          }
-        }
-
-        // Decide whether web search is needed
-        const needsWebSearch = /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(cleanMessage);
-
-        // Send assistant_start event before streaming begins
-        sendEvent('assistant_start', { conversationId });
-
-        if (imageData) {
-  console.log('[IMAGE STREAM] 🖼️ Analyzing image...');
-
-  try {
-    const visionAI = new GoogleGenAI({
-      apiKey: geminiApiKey,
-    });
-
-    sendEvent('thinking', { status: 'analyzing_image' });
-
-    const visionResult = await visionAI.models.generateContent({
-      model: 'gemini-3.7-flash',
-      contents: [
-        {
-          inlineData: {
-            mimeType: imageMimeType || 'image/jpeg',
-            data: imageData,
-          },
-        },
-        {
-          text: cleanMessage,
-        },
-      ],
-      config: {
-        systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
-      },
-    });
-
-    assistantResponseText =
-      visionResult.text || 'I could not analyze this image.';
-
-    const words = assistantResponseText.split(/(\s+)/);
-
-    for (const word of words) {
-      if (word) {
-        sendEvent('assistant_chunk', {
-          content: word,
-        });
-
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    }
-  } catch (visionError) {
-    console.error('[IMAGE STREAM] ❌ Vision error:', visionError);
-
-    sendError(
-      'I could not analyze this image right now.',
-      true
-    );
-
-    return res.end();
-  }
-} else if (needsWebSearch) {
-          // Web search is non-streaming - send as complete response
-          console.log('[WEB SEARCH STREAM] Using web search for:', cleanMessage);
-          sendEvent('thinking', { status: 'searching' });
-
-          const webResult = await generateWebSearchResponse(cleanMessage);
-          assistantResponseText = webResult.text;
-          webSources = webResult.sources || [];
-
-          // Stream the web search result as tokens for consistent UX
-          const words = assistantResponseText.split(/(\s+)/);
-          for (const word of words) {
-            if (word) {
-              sendEvent('assistant_chunk', { content: word });
-              // Small delay to simulate streaming
-              await new Promise(r => setTimeout(r, 10));
-            }
-          }
-        } else {
-          // Normal AI streaming - wrap sendEvent to convert 'token' to 'assistant_chunk'
-          const streamSendEvent = (type, data) => {
-            if (type === 'token') {
-              sendEvent('assistant_chunk', data);
-            } else {
-              sendEvent(type, data);
-            }
-          };
-          const streamResult = await streamWithRetry(genAI, 'gemini-3.5-flash', historyForGemini, cleanMessage, streamSendEvent);
-          assistantResponseText = streamResult.text;
-        }
-
-        // Safety check
-        if (!assistantResponseText || assistantResponseText.trim().length === 0) {
-          throw new Error('AI returned an empty response.');
-        }
-
-      } catch (aiErr) {
-        console.warn('[AI STREAM] Error. Using Aegis fallback:', aiErr.message);
-        assistantResponseText = generateFallbackResponse(cleanMessage, recentMessages);
-        // Stream fallback response
-        const words = assistantResponseText.split(/(\s+)/);
-        for (const word of words) {
-          if (word) {
-            sendEvent('assistant_chunk', { content: word });
-            await new Promise(r => setTimeout(r, 10));
-          }
-        }
-      }
-    } else {
-      // GEMINI API KEY NOT CONFIGURED
-      console.warn('[AI STREAM] GEMINI_API_KEY is not configured.');
-      assistantResponseText = generateFallbackResponse(cleanMessage, recentMessages);
-      const words = assistantResponseText.split(/(\s+)/);
-      for (const word of words) {
-        if (word) {
-          sendEvent('assistant_chunk', { content: word });
-          await new Promise(r => setTimeout(r, 10));
-        }
-      }
-    }
-
-    // 6. SAVE ASSISTANT RESPONSE
-    const assistantMsgResult = await messageQueries.add(conversationId, 'assistant', assistantResponseText);
-    assistantMessageId = assistantMsgResult.id;
-    await conversationQueries.touchUpdatedAt(conversationId);
-
-    // 7. UPDATE CONVERSATION TITLE
-    let updatedTitle = null;
-    const currentConv = await conversationQueries.getByIdAndUser(conversationId, req.user.id);
-
-    if (currentConv && (currentConv.title === 'New Conversation' || isNewConversation)) {
-      const generatedTitle = cleanMessage.length > 40
-        ? `${cleanMessage.substring(0, 40)}...`
-        : cleanMessage;
-
-      await conversationQueries.updateTitle(generatedTitle, conversationId, req.user.id);
-      updatedTitle = generatedTitle;
-    }
-
-    // 8. SEND COMPLETION EVENT (assistant_complete with all data)
-    sendEvent('assistant_complete', {
-      conversationId,
-      messageId: assistantMessageId,
-      content: assistantResponseText,
-      sources: webSources,
-      updatedTitle
-    });
-
-  } catch (err) {
-    console.error('Stream chat endpoint error:', err);
-    sendError('An error occurred while processing your message.', false);
-  } finally {
-    res.end();
-  }
-});
-
-
-// ============================================================
-// EXPORT ROUTER
-// ============================================================
+/**
+ * ============================================================
+ * EXPORT ROUTER
+ * ============================================================
+ */
 
 module.exports = router;

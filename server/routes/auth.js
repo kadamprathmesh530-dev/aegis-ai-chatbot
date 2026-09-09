@@ -115,7 +115,9 @@ router.post('/register', async (req, res) => {
         username: newUser.username,
         email: newUser.email,
         role: newUser.role,
-        createdAt: newUser.created_at
+        createdAt: newUser.created_at,
+        authProvider: newUser.auth_provider,
+        avatarUrl: newUser.avatar_url
       },
       token
     });
