@@ -13,6 +13,11 @@ const {
 // Initialize Google OAuth2 client for ID token verification
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+// Define the Google OAuth callback URL
+const GOOGLE_REDIRECT_URI =
+  process.env.GOOGLE_REDIRECT_URI ||
+  'https://aegis-ai-chatbot.onrender.com/api/auth/google/callback';
+
 /**
  * GET /api/config/google
  * Public endpoint to provide Google Web Client ID to frontend
