@@ -18,7 +18,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.prathmesh530.AegisAIApp"
+      "package": "com.aegisai.app"
     },
     "web": {
       "output": "static",

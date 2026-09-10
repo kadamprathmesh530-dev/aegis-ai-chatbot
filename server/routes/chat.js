@@ -65,7 +65,7 @@ async function testWebSearch(query) {
   return response;
 }
 
-router.get('/test-web-search', async (req, res) => {
+router.get('/test-web-search', authenticateToken, async (req, res) => {
   try {
     const result = await testWebSearch(
       'What is the latest major news in India today?'

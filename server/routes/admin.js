@@ -11,9 +11,9 @@ router.use(requireAdmin);
  * GET /api/admin/stats
  * Overview analytics for the admin dashboard
  */
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    const stats = conversationQueries.getAdminStats.get();
+    const stats = await conversationQueries.getAdminStats();
     return res.json({
       success: true,
       stats
@@ -31,9 +31,9 @@ router.get('/stats', (req, res) => {
  * GET /api/admin/users
  * List all registered users with their activity metrics
  */
-router.get('/users', (req, res) => {
+router.get('/users', async (req, res) => {
   try {
-    const users = userQueries.getAllUsersWithStats.all();
+    const users = await userQueries.getAllUsersWithStats();
     return res.json({
       success: true,
       users
@@ -51,10 +51,10 @@ router.get('/users', (req, res) => {
  * GET /api/admin/users/:userId/conversations
  * View conversations list belonging to a specific user
  */
-router.get('/users/:userId/conversations', (req, res) => {
+router.get('/users/:userId/conversations', async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = userQueries.getById.get(userId);
+    const user = await userQueries.getById(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -62,7 +62,7 @@ router.get('/users/:userId/conversations', (req, res) => {
       });
     }
 
-    const conversations = conversationQueries.getConversationsBySpecificUserForAdmin.all(userId);
+    const conversations = await conversationQueries.getConversationsBySpecificUserForAdmin(userId);
     return res.json({
       success: true,
       user,
@@ -81,10 +81,10 @@ router.get('/users/:userId/conversations', (req, res) => {
  * GET /api/admin/conversations/:id/messages
  * View full conversation transcript of any user
  */
-router.get('/conversations/:id/messages', (req, res) => {
+router.get('/conversations/:id/messages', async (req, res) => {
   try {
     const { id } = req.params;
-    const conversation = conversationQueries.getById.get(id);
+    const conversation = await conversationQueries.getById(id);
 
     if (!conversation) {
       return res.status(404).json({
@@ -93,8 +93,8 @@ router.get('/conversations/:id/messages', (req, res) => {
       });
     }
 
-    const owner = userQueries.getById.get(conversation.user_id);
-    const messages = messageQueries.getByConversationId.all(id);
+    const owner = await userQueries.getById(conversation.user_id);
+    const messages = await messageQueries.getByConversationId(id);
 
     return res.json({
       success: true,
@@ -115,7 +115,7 @@ router.get('/conversations/:id/messages', (req, res) => {
  * PATCH /api/admin/users/:userId/role
  * Update role of a user (user <-> admin)
  */
-router.patch('/users/:userId/role', (req, res) => {
+router.patch('/users/:userId/role', async (req, res) => {
   try {
     const { userId } = req.params;
     const { role } = req.body;
@@ -127,7 +127,7 @@ router.patch('/users/:userId/role', (req, res) => {
       });
     }
 
-    const targetUser = userQueries.getById.get(userId);
+    const targetUser = await userQueries.getById(userId);
     if (!targetUser) {
       return res.status(404).json({
         success: false,
@@ -137,7 +137,7 @@ router.patch('/users/:userId/role', (req, res) => {
 
     // Safety: prevent admin from demoting themselves if they are the only admin
     if (parseInt(userId, 10) === req.user.id && role === 'user') {
-      const stats = conversationQueries.getAdminStats.get();
+      const stats = await conversationQueries.getAdminStats();
       if (stats.total_admins <= 1) {
         return res.status(400).json({
           success: false,
@@ -146,7 +146,7 @@ router.patch('/users/:userId/role', (req, res) => {
       }
     }
 
-    userQueries.updateRole.run(role, userId);
+    await userQueries.updateRole(role, userId);
 
     return res.json({
       success: true,
@@ -165,7 +165,7 @@ router.patch('/users/:userId/role', (req, res) => {
  * DELETE /api/admin/users/:userId
  * Delete a user account and cascade delete conversations
  */
-router.delete('/users/:userId', (req, res) => {
+router.delete('/users/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
 
@@ -176,7 +176,7 @@ router.delete('/users/:userId', (req, res) => {
       });
     }
 
-    const targetUser = userQueries.getById.get(userId);
+    const targetUser = await userQueries.getById(userId);
     if (!targetUser) {
       return res.status(404).json({
         success: false,
@@ -184,7 +184,7 @@ router.delete('/users/:userId', (req, res) => {
       });
     }
 
-    userQueries.deleteUser.run(userId);
+    await userQueries.deleteUser(userId);
 
     return res.json({
       success: true,

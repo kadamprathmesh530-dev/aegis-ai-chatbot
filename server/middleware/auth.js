@@ -2,9 +2,32 @@ const jwt = require('jsonwebtoken');
 
 const { userQueries } = require('../db/database');
 
-const JWT_SECRET =
-  process.env.JWT_SECRET ||
+const DEFAULT_JWT_SECRET =
   'default_insecure_secret_key_change_in_production';
+
+const JWT_SECRET =
+  process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+
+// =====================================================
+// PRODUCTION SAFETY CHECK
+// =====================================================
+// Never sign/verify tokens with the insecure hardcoded
+// fallback in production. Failing fast at startup is
+// intentional: a predictable JWT secret is a critical
+// vulnerability. Development keeps working without a
+// JWT_SECRET environment variable (insecure default).
+if (
+  process.env.NODE_ENV === 'production' &&
+  (
+    !process.env.JWT_SECRET ||
+    process.env.JWT_SECRET === DEFAULT_JWT_SECRET
+  )
+) {
+  throw new Error(
+    'JWT_SECRET must be configured when NODE_ENV=production. ' +
+    'Set a strong, unique JWT_SECRET before starting the server.'
+  );
+}
 
 const TOKEN_EXPIRY = '7d';
 
