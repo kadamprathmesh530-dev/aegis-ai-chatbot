@@ -537,4 +537,414 @@ router.post('/google', async (req, res) => {
   }
 });
 
+
+
+/**
+ * Escape HTML for safe embedding in callback pages
+ */
+function escapeHtml(str) {
+    if (typeof str !== 'string') return '';
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+/**
+ * Get base URL from full redirect URI
+ */
+function getBaseUrl(fullUrl) {
+    const match = fullUrl.match(/^(https?:\/\/[^\/]+)/);
+    return match ? match[1] : 'https://aegis-ai-chatbot.onrender.com';
+}
+
+/**
+ * Generate a standard error page for callback
+ */
+function makeErrorPage(title, message) {
+    return `
+        <!DOCTYPE html>
+        <html>
+        <head><title>${escapeHtml(title)}</title></head>
+        <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; background: #f5f5f5;">
+            <div style="text-align: center; max-width: 400px;">
+                <h1 style="font-size: 20px; margin-bottom: 12px;">${escapeHtml(title)}</h1>
+                <p style="color: #666; margin-bottom: 20px;">${escapeHtml(message)}</p>
+                <a href="${escapeHtml(getBaseUrl(GOOGLE_REDIRECT_URI))}"
+                   style="display: inline-block; padding: 10px 20px; background: #007AFF; color: white; text-decoration: none; border-radius: 8px; font-weight: 500;">
+                    Return to AegisAI
+                </a>
+            </div>
+        </body>
+        </html>
+    `;
+}
+
+
+
+
+// HTML page templates for Google OAuth callback
+const signingInPage = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Signing you in...</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; background: #f5f5f5; }
+            .container { text-align: center; max-width: 400px; }
+            h1 { font-size: 20px; margin-bottom: 12px; color: #333; }
+            p { color: #666; margin-bottom: 20px; }
+            .spinner { width: 40px; height: 40px; border: 3px solid #e0e0e0; border-top-color: #007AFF; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+            .instructions { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-top: 20px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Signing you in...</h1>
+            <p>Please return to AegisAI to continue.</p>
+            <div class="spinner"></div>
+            <div class="instructions">
+                <p><strong>Don't close this window yet.</strong></p>
+                <p>AegisAI is signing you in with your Google account.</p>
+                <p>Return to the app now.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+`;
+
+const accountCreatedPage = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Account Created - Signing in...</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; background: #f5f5f5; }
+            .container { text-align: center; max-width: 400px; }
+            h1 { font-size: 20px; margin-bottom: 12px; color: #333; }
+            p { color: #666; margin-bottom: 20px; }
+            .spinner { width: 40px; height: 40px; border: 3px solid #e0e0e0; border-top-color: #007AFF; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+            .instructions { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-top: 20px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Account Created!</h1>
+            <p>Your AegisAI account has been created with Google.</p>
+            <div class="spinner"></div>
+            <div class="instructions">
+                <p><strong>Don't close this window yet.</strong></p>
+                <p>AegisAI is signing you in. Return to the app now.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+`;
+
+const emailExistsPage = `
+    <!DOCTYPE html>
+    <html>
+    <head><title>Email Already Registered</title></head>
+    <body style="font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; background: #f5f5f5;">
+        <div style="text-align: center; max-width: 400px;">
+            <h1 style="font-size: 20px; margin-bottom: 12px;">Email Already Registered</h1>
+            <p style="color: #666; margin-bottom: 20px;">This email is already associated with an AegisAI account.</p>
+            <p style="font-size: 14px; background: #fff3cd; padding: 10px; border-radius: 6px; margin-bottom: 20px;">Please sign in with your email and password, or contact support if you need to link accounts.</p>
+            <a href="${getBaseUrl(GOOGLE_REDIRECT_URI)}"
+               style="display: inline-block; padding: 10px 20px; background: #007AFF; color: white; text-decoration: none; border-radius: 8px; font-weight: 500;">
+                Return to AegisAI
+            </a>
+        </div>
+    </body>
+    </html>
+`;
+
+
+
+
+/**
+ * GET /api/auth/google/callback
+ * Google OAuth callback - exchange code, verify ID token, create session
+ * Lifecycle: pending -> processing -> completed/failed
+ */
+router.get('/google/callback', async (req, res) => {
+    try {
+        const { code, state, error: oauthError } = req.query;
+
+        if (oauthError) {
+            const loginCode = state;
+            const codeEntry = loginCodes.get(loginCode);
+            if (codeEntry && !codeEntry.consumed) {
+                codeEntry.status = 'failed';
+                codeEntry.consumed = true;
+                delete codeEntry.token;
+                delete codeEntry.user;
+            }
+            return res.status(400).send(makeErrorPage('Google Sign-In Cancelled', oauthError));
+        }
+
+        if (!code || !state) {
+            return res.status(400).send(makeErrorPage('Invalid Request', 'Missing authorization code or state parameter.'));
+        }
+
+        const loginCode = state;
+        const codeEntry = loginCodes.get(loginCode);
+
+        if (!codeEntry) {
+            return res.status(400).send(makeErrorPage('Session Not Found', 'This sign-in session could not be found. Please try again.'));
+        }
+
+        if (codeEntry.expiresAt_ms <= Date.now()) {
+            codeEntry.status = 'failed';
+            codeEntry.consumed = true;
+            delete codeEntry.token;
+            delete codeEntry.user;
+            return res.status(400).send(makeErrorPage('Session Expired', 'This sign-in session has expired. Please try again.'));
+        }
+
+        if (codeEntry.consumed) {
+            if (codeEntry.status === 'completed') {
+                return res.status(200).send(signingInPage);
+            }
+            return res.status(400).send(makeErrorPage('Session Already Used', 'This sign-in session has already been used. Please try again.'));
+        }
+
+        codeEntry.status = 'processing';
+
+        let tokens;
+        try {
+            tokens = await googleClient.getTokenAsync({
+                code: code,
+                codeVerifier: codeEntry.verifier
+            });
+        } catch (exchangeErr) {
+            console.error('Google token exchange error:', exchangeErr);
+            codeEntry.status = 'failed';
+            codeEntry.consumed = true;
+            delete codeEntry.token;
+            delete codeEntry.user;
+            return res.status(400).send(makeErrorPage('Authentication Failed', 'Could not complete Google authentication. Please try again.'));
+        }
+
+        let payload;
+        try {
+            const ticket = await googleClient.verifyIdToken({
+                idToken: tokens.id_token,
+                audience: process.env.GOOGLE_CLIENT_ID
+            });
+            payload = ticket.getPayload();
+        } catch (verifyErr) {
+            console.error('Google ID token verification error:', verifyErr);
+            codeEntry.status = 'failed';
+            codeEntry.consumed = true;
+            delete codeEntry.token;
+            delete codeEntry.user;
+            return res.status(400).send(makeErrorPage('Authentication Failed', 'Could not verify Google identity. Please try again.'));
+        }
+
+        if (!payload) {
+            codeEntry.status = 'failed';
+            codeEntry.consumed = true;
+            delete codeEntry.token;
+            delete codeEntry.user;
+            return res.status(400).send(makeErrorPage('Authentication Failed', 'Invalid Google identity token.'));
+        }
+
+
+
+        const { sub, email: rawEmail, email_verified } = payload;
+        const cleanEmail = rawEmail?.toLowerCase().trim();
+
+        if (!sub || !cleanEmail) {
+            codeEntry.status = 'failed';
+            codeEntry.consumed = true;
+            delete codeEntry.token;
+            delete codeEntry.user;
+            return res.status(400).send(makeErrorPage('Invalid Identity', 'Google did not provide required identity information.'));
+        }
+
+        if (!email_verified) {
+            codeEntry.status = 'failed';
+            codeEntry.consumed = true;
+            delete codeEntry.token;
+            delete codeEntry.user;
+            return res.status(400).send(makeErrorPage('Email Not Verified', 'Please verify your Google email address and try again.'));
+        }
+
+        if (process.env.GOOGLE_ALLOWED_DOMAINS) {
+            const allowedDomains = process.env.GOOGLE_ALLOWED_DOMAINS.split(',').map(d => d.trim().toLowerCase());
+            const userDomain = cleanEmail.split('@')[1];
+            if (!userDomain || !allowedDomains.includes(userDomain)) {
+                codeEntry.status = 'failed';
+                codeEntry.consumed = true;
+                delete codeEntry.token;
+                delete codeEntry.user;
+                return res.status(403).send(makeErrorPage('Domain Not Allowed', 'This email domain is not authorized to sign in.'));
+            }
+        }
+
+        let user = await userQueries.getByGoogleId(sub);
+
+        if (user) {
+            const token = generateToken(user);
+            codeEntry.status = 'completed';
+            codeEntry.token = token;
+            codeEntry.user = {
+                id: user.id,
+                username: user.username,
+                email: user.email,
+                avatarUrl: user.avatar_url,
+                authProvider: user.auth_provider
+            };
+            return res.send(signingInPage);
+        }
+
+        const existingByEmail = await userQueries.getByEmail(cleanEmail);
+
+        if (existingByEmail) {
+            codeEntry.status = 'failed';
+            codeEntry.consumed = true;
+            delete codeEntry.token;
+            delete codeEntry.user;
+            return res.status(409).send(emailExistsPage);
+        }
+
+        try {
+            const avatarUrl = payload.picture || null;
+
+            let username = cleanEmail.split('@')[0];
+            username = username.replace(/[^a-zA-Z0-9_]/g, '').substring(0, 30);
+            if (username.length < 3) {
+                username = 'user' + Math.random().toString(36).substring(2, 8);
+            }
+
+            let baseUsername = username;
+            let counter = 1;
+            while (await userQueries.getByUsername(username)) {
+                username = baseUsername + counter.toString();
+                counter++;
+            }
+
+            const newUser = await userQueries.createGoogleUser({
+                google_id: sub,
+                email: cleanEmail,
+                username: username,
+                avatar_url: avatarUrl
+            });
+
+            const token = generateToken(newUser);
+            codeEntry.status = 'completed';
+            codeEntry.token = token;
+            codeEntry.user = {
+                id: newUser.id,
+                username: newUser.username,
+                email: newUser.email,
+                avatarUrl: newUser.avatar_url,
+                authProvider: newUser.auth_provider
+            };
+
+            return res.send(accountCreatedPage);
+        } catch (createErr) {
+            console.error('Google user creation error:', createErr);
+            codeEntry.status = 'failed';
+            codeEntry.consumed = true;
+            delete codeEntry.token;
+            delete codeEntry.user;
+            return res.status(500).send(makeErrorPage('Account Creation Failed', 'Could not create your account. Please try again.'));
+        }
+    } catch (err) {
+        console.error('Google OAuth callback error:', err);
+        res.status(500).send(makeErrorPage('Server Error', 'An unexpected error occurred. Please try again.'));
+    }
+});
+
+
+
+
+/**
+ * POST /api/auth/google/status
+ * Check status of Google OAuth flow - poll from mobile app
+ * Lifecycle: pending/processing -> completed (consumed on success) / failed (consumed)
+ */
+router.post('/google/status', async (req, res) => {
+    try {
+        const { loginCode } = req.body;
+
+        if (!loginCode) {
+            return res.status(400).json({
+                success: false,
+                error: 'Login code is required.'
+            });
+        }
+
+        const codeEntry = loginCodes.get(loginCode);
+
+        if (!codeEntry) {
+            return res.status(404).json({
+                success: false,
+                error: 'Invalid or expired login code.'
+            });
+        }
+
+        if (codeEntry.expiresAt_ms <= Date.now()) {
+            loginCodes.delete(loginCode);
+            return res.status(410).json({
+                success: false,
+                error: 'Login code has expired. Please start the sign-in process again.'
+            });
+        }
+
+        if (!codeEntry.status || codeEntry.status === 'pending' || codeEntry.status === 'processing') {
+            return res.status(202).json({
+                success: false,
+                status: 'pending',
+                message: 'Authentication in progress. Please continue in the browser.'
+            });
+        }
+
+        if (codeEntry.status === 'completed' && codeEntry.token && codeEntry.user) {
+            const token = codeEntry.token;
+            const user = codeEntry.user;
+            loginCodes.delete(loginCode);
+
+            return res.json({
+                success: true,
+                message: 'Google Sign-In successful.',
+                user,
+                token
+            });
+        }
+
+        if (codeEntry.status === 'failed') {
+            loginCodes.delete(loginCode);
+            return res.status(400).json({
+                success: false,
+                error: 'Google Sign-In failed. Please try again.'
+            });
+        }
+
+        loginCodes.delete(loginCode);
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid login code state.'
+        });
+    } catch (err) {
+        console.error('Google OAuth status error:', err);
+        res.status(500).json({
+            success: false,
+            error: 'An error occurred checking sign-in status.'
+        });
+    }
+});
+
+
+
 module.exports = router;
