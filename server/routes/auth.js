@@ -816,7 +816,7 @@ router.get("/google/callback", async (req, res) => {
     let payload;
     try {
       const ticket = await googleClient.verifyIdToken({
-        idToken: tokens.id_token,
+        idToken: tokens.tokens.id_token,
         audience: process.env.GOOGLE_CLIENT_ID,
       });
       payload = ticket.getPayload();
