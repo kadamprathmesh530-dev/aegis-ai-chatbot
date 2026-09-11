@@ -949,6 +949,89 @@ async function streamWithRetry({
 }) {
   /**
    * ----------------------------------------------------------
+   * PROVIDER STREAM IDLE-TIMEOUT
+   *
+   * A provider SSE stream can stop sending data without ever
+   * closing the connection (observed with Nemotron: `chunk`
+   * events arrive, then the stream hangs, so the code after
+   * `await streamWithRetry()` — the final `done` SSE event and
+   * `res.end()` — is never reached and the client stays blocked).
+   *
+   * The watchdog below fires only after AI_STREAM_IDLE_TIMEOUT_MS
+   * WITHOUT incoming wire data. Every received chunk re-arms it,
+   * so a slow-but-healthy stream is never truncated. On timeout,
+   * the upstream stream is cancelled through its SDK-supported
+   * mechanism and the idle error propagates to the existing
+   * provider catch blocks, so the fallback chain
+   * (Nemotron → Gemini → Aegis) continues exactly as with any
+   * other provider error.
+   * ----------------------------------------------------------
+   */
+  const AI_STREAM_IDLE_TIMEOUT_MS = 60 * 1000;
+
+  async function consumeStreamWithIdleTimeout({
+    label,
+    cancel,
+    startConsume
+  }) {
+    let idleTimerId = null;
+    let consumePromise = null;
+    let rejectIdle = null;
+
+    // Settles only when the idle watchdog fires. Promise.race attaches
+    // handlers to it, so a never-settling (healthy case) or
+    // already-settled rejection can never become an unhandled rejection.
+    const idlePromise = new Promise((_, reject) => {
+      rejectIdle = reject;
+    });
+
+    const armIdleTimer = () => {
+      clearTimeout(idleTimerId);
+      idleTimerId = setTimeout(() => {
+        const idleError = new Error(
+          `[AI STREAM] ${label} stream idle timeout: no data for ${AI_STREAM_IDLE_TIMEOUT_MS}ms.`
+        );
+        idleError.code = 'AI_STREAM_IDLE_TIMEOUT';
+        rejectIdle(idleError);
+      }, AI_STREAM_IDLE_TIMEOUT_MS);
+    };
+
+    try {
+      consumePromise = Promise.resolve(startConsume(armIdleTimer));
+      return await Promise.race([consumePromise, idlePromise]);
+    } catch (err) {
+      if (err && err.code === 'AI_STREAM_IDLE_TIMEOUT') {
+        console.warn(
+          `[AI STREAM] ⏱️ ${label} idle timeout (${AI_STREAM_IDLE_TIMEOUT_MS}ms without data) — cancelling stream, continuing fallback chain.`
+        );
+      }
+      // Cancel the upstream request via its supported mechanism so the
+      // wedged iterator unwinds instead of holding the socket open.
+      // Safe no-op when the stream already finished or errored.
+      if (typeof cancel === 'function') {
+        try {
+          cancel();
+        } catch (cancelError) {
+          console.warn(
+            `[AI STREAM] ⚠️ Could not cancel ${label} stream:`,
+            cancelError?.message || cancelError
+          );
+        }
+      }
+      // The abandoned iterator may settle later (typically with an
+      // abort-induced rejection); swallow it so it can never surface
+      // as an unhandled promise rejection.
+      if (consumePromise) {
+        consumePromise.catch(() => {});
+      }
+      throw err;
+    } finally {
+      clearTimeout(idleTimerId);
+    }
+  }
+
+  /**
+   * ----------------------------------------------------------
    * PRIMARY — NEMOTRON 3 ULTRA STREAM
    * ----------------------------------------------------------
    */
@@ -965,18 +1048,44 @@ async function streamWithRetry({
 
     let fullText = '';
 
-    for await (const chunk of stream) {
-      const delta =
-        chunk?.choices?.[0]?.delta?.content || '';
-
-      if (!delta) continue;
-
-      fullText += delta;
-
-      if (typeof onChunk === 'function') {
-        onChunk(delta);
+    // OpenAI SDK Stream exposes `controller` — a public AbortController
+    // for the underlying HTTP request (openai v7.8.0,
+    // core/streaming.d.ts; the SDK itself checks
+    // `stream.controller.signal.aborted` after consuming a stream).
+    // Aborting it rejects the SDK's pending reader and ends the stuck
+    // iteration cleanly instead of hanging forever.
+    const cancelNemotronStream = () => {
+      if (typeof stream.controller?.abort === 'function') {
+        stream.controller.abort();
       }
-    }
+    };
+
+    fullText = await consumeStreamWithIdleTimeout({
+      label: 'Nemotron',
+      cancel: cancelNemotronStream,
+      startConsume: async (armIdleTimer) => {
+        armIdleTimer();
+
+        for await (const chunk of stream) {
+          // Any incoming wire data counts as activity and re-arms the
+          // idle watchdog, even chunks without a content delta.
+          armIdleTimer();
+
+          const delta =
+            chunk?.choices?.[0]?.delta?.content || '';
+
+          if (!delta) continue;
+
+          fullText += delta;
+
+          if (typeof onChunk === 'function') {
+            onChunk(delta);
+          }
+        }
+
+        return fullText;
+      }
+    });
 
     fullText = cleanAIText(fullText);
 
@@ -1036,26 +1145,53 @@ async function streamWithRetry({
           ]
         }));
 
-      const result = await model.generateContentStream({
-        contents,
-        generationConfig: {
-          maxOutputTokens: 1024
-        }
-      });
+      // @google/generative-ai (v0.24.x, the SDK used by getGeminiModel)
+      // supports per-call request cancellation through the
+      // `SingleRequestOptions.signal` passed as the second argument of
+      // generateContentStream. The SDK composes that signal into the
+      // fetch's own AbortController (buildFetchOptions), so aborting it
+      // errors the streaming response body and unwinds the pending
+      // reader — the safest SDK-supported cancellation mechanism in
+      // this version (the returned generator has no cleanup of its own).
+      const geminiAbortController = new AbortController();
+
+      const result = await model.generateContentStream(
+        {
+          contents,
+          generationConfig: {
+            maxOutputTokens: 1024
+          }
+        },
+        { signal: geminiAbortController.signal }
+      );
 
       let fullText = '';
 
-      for await (const chunk of result.stream) {
-        const delta = chunk?.text?.() || '';
+      fullText = await consumeStreamWithIdleTimeout({
+        label: modelName,
+        cancel: () => geminiAbortController.abort(),
+        startConsume: async (armIdleTimer) => {
+          armIdleTimer();
 
-        if (!delta) continue;
+          for await (const chunk of result.stream) {
+            // Any incoming wire data counts as activity and re-arms the
+            // idle watchdog, even chunks without a text delta.
+            armIdleTimer();
 
-        fullText += delta;
+            const delta = chunk?.text?.() || '';
 
-        if (typeof onChunk === 'function') {
-          onChunk(delta);
+            if (!delta) continue;
+
+            fullText += delta;
+
+            if (typeof onChunk === 'function') {
+              onChunk(delta);
+            }
+          }
+
+          return fullText;
         }
-      }
+      });
 
       fullText = cleanAIText(fullText);
 

@@ -255,6 +255,54 @@ function handleStreamChunk(data) {
       }
       break;
 
+    case 'chunk':
+      // === assistant_chunk behavior ===
+      // On first chunk, create the assistant message element if not yet created
+      if (!currentAssistantMessageEl) {
+        currentAssistantMessageEl = document.createElement('div');
+        currentAssistantMessageEl.className = 'chat-message bot-message';
+        currentAssistantContent = '';
+
+        const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        currentAssistantMessageEl.innerHTML = `
+          <div class="message-avatar">
+            <i class="fa-solid fa-brain"></i>
+          </div>
+          <div class="message-content-wrapper">
+            <div class="message-bubble"></div>
+            <div class="message-meta">
+              <span>${formattedTime}</span>
+              <button class="icon-btn-ghost" style="width:20px;height:20px;font-size:0.7rem;" onclick="copyMessageText(this)" title="Copy message"><i class="fa-regular fa-copy"></i></button>
+            </div>
+          </div>
+        `;
+
+        feed.appendChild(currentAssistantMessageEl);
+        scrollMessagesToBottom();
+      }
+
+      // Append chunk to current content
+      currentAssistantContent += data.content;
+      if (currentAssistantMessageEl) {
+        const bubble = currentAssistantMessageEl.querySelector('.message-bubble');
+        if (bubble && typeof marked !== 'undefined') {
+          bubble.innerHTML = marked.parse(currentAssistantContent);
+          // Apply syntax highlighting
+          if (typeof hljs !== 'undefined') {
+            bubble.querySelectorAll('pre code').forEach((block) => {
+              hljs.highlightElement(block);
+            });
+          }
+          // Render math
+          if (window.MathJax && window.MathJax.typesetPromise) {
+            window.MathJax.typesetPromise([currentAssistantMessageEl]).catch(() => {});
+          }
+        }
+      }
+      scrollMessagesToBottom();
+      break;
+
     case 'assistant_start':
       // Create assistant message element
       currentAssistantMessageEl = document.createElement('div');
@@ -280,29 +328,7 @@ function handleStreamChunk(data) {
       scrollMessagesToBottom();
       break;
 
-    case 'assistant_chunk':
-      // Append chunk to current content
-      currentAssistantContent += data.content;
-      if (currentAssistantMessageEl) {
-        const bubble = currentAssistantMessageEl.querySelector('.message-bubble');
-        if (bubble && typeof marked !== 'undefined') {
-          bubble.innerHTML = marked.parse(currentAssistantContent);
-          // Apply syntax highlighting
-          if (typeof hljs !== 'undefined') {
-            bubble.querySelectorAll('pre code').forEach((block) => {
-              hljs.highlightElement(block);
-            });
-          }
-          // Render math
-          if (window.MathJax && window.MathJax.typesetPromise) {
-            window.MathJax.typesetPromise([currentAssistantMessageEl]).catch(() => {});
-          }
-        }
-      }
-      scrollMessagesToBottom();
-      break;
-
-    case 'assistant_complete':
+    case 'done':
       // Update conversation ID if new
       if (!activeConversationId && data.conversation_id) {
         activeConversationId = data.conversation_id;
@@ -336,14 +362,15 @@ function handleStreamChunk(data) {
       break;
 
     case 'error':
-      console.error('Stream error:', data.error);
+      console.error('Stream error:', data.error || data.message);
+      const errorMessage = data.error || data.message || 'Unknown error';
       if (currentAssistantMessageEl) {
         const bubble = currentAssistantMessageEl.querySelector('.message-bubble');
         if (bubble) {
-          bubble.innerHTML = `⚠️ **Error:** ${data.error}`;
+          bubble.innerHTML = `⚠️ **Error:** ${errorMessage}`;
         }
       } else {
-        appendMessageToFeed('assistant', `⚠️ **Error:** ${data.error}`, new Date().toISOString());
+        appendMessageToFeed('assistant', `⚠️ **Error:** ${errorMessage}`, new Date().toISOString());
       }
       break;
   }

@@ -210,10 +210,15 @@ const API = {
           
           // Each event may have multiple lines, find the data: line
           const lines = event.split('\n');
+          let eventType = null;
           for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim();
+            }
             if (line.startsWith('data: ')) {
               try {
                 const data = JSON.parse(line.slice(6));
+                if (eventType) data.type = eventType;
                 if (onChunk) onChunk(data);
               } catch (e) {
                 console.warn('Failed to parse SSE data:', line);
