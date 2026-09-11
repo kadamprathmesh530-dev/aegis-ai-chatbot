@@ -194,14 +194,10 @@ export default function LoginScreen({
       // STEP 2: Open browser for Google authentication
       // =====================================================
 
-      const browserResult = await WebBrowser.openBrowserAsync(
-        startData.authUrl
+      const browserResult = await WebBrowser.openAuthSessionAsync(
+        startData.authUrl,
+        'aegisaiapp://oauth2callback'
       );
-
-      // If user cancelled or closed the browser
-      if (browserResult.type === WebBrowser.WebBrowserResultType.DISMISS) {
-        throw new Error('Google Sign-In was cancelled. Please try again.');
-      }
 
       // =====================================================
       // STEP 3: Poll for completion

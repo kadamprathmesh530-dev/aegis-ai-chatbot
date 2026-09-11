@@ -905,6 +905,10 @@ router.get("/google/callback", async (req, res) => {
       }
     }
 
+    const returnUrl =
+      "aegisaiapp://oauth2callback?loginCode=" +
+      encodeURIComponent(loginCode);
+
     let user = await userQueries.getByGoogleId(sub);
 
     if (user) {
@@ -918,7 +922,7 @@ router.get("/google/callback", async (req, res) => {
         avatarUrl: user.avatar_url,
         authProvider: user.auth_provider,
       };
-      return res.send(signingInPage);
+      return res.redirect(returnUrl);
     }
 
     const existingByEmail = await userQueries.getByEmail(cleanEmail);
@@ -965,7 +969,7 @@ router.get("/google/callback", async (req, res) => {
         authProvider: newUser.auth_provider,
       };
 
-      return res.send(accountCreatedPage);
+      return res.redirect(returnUrl);
     } catch (createErr) {
       console.error("Google user creation error:", createErr);
       codeEntry.status = "failed";
