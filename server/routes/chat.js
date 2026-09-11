@@ -1,30 +1,32 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4 } = require("uuid");
+
+const { conversationQueries, messageQueries } = require("../db/database");
+
+const { authenticateToken } = require("../middleware/auth");
 
 const {
-  conversationQueries,
-  messageQueries
-} = require('../db/database');
-
-const { authenticateToken } = require('../middleware/auth');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { GoogleGenAI } = require('@google/genai');
-const OpenAI = require('openai');
-const { tavily } = require('@tavily/core');
-const mammoth = require('mammoth');
+  buildMemoryContext,
+  markMemoriesAccessed,
+} = require("../services/memoryService");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
+const OpenAI = require("openai");
+const { tavily } = require("@tavily/core");
+const mammoth = require("mammoth");
 
 const tavilyClient = tavily({
-  apiKey: process.env.TAVILY_API_KEY
+  apiKey: process.env.TAVILY_API_KEY,
 });
 
 const webAI = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY
+  apiKey: process.env.GEMINI_API_KEY,
 });
 
 const nvidiaAI = new OpenAI({
   apiKey: process.env.NVIDIA_API_KEY,
-  baseURL: 'https://integrate.api.nvidia.com/v1'
+  baseURL: "https://integrate.api.nvidia.com/v1",
 });
 
 // ============================================================
@@ -32,55 +34,55 @@ const nvidiaAI = new OpenAI({
 // ============================================================
 
 const SUPPORTED_FILE_MIME_TYPES = new Set([
-  'application/pdf',
-  'text/plain',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  "application/pdf",
+  "text/plain",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
 const FILE_MIME_BY_EXTENSION = {
-  pdf: 'application/pdf',
-  txt: 'text/plain',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  pdf: "application/pdf",
+  txt: "text/plain",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
 
 const DOCX_MIME_TYPE =
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 // Maximum accepted file size (raw bytes) for uploaded files.
 const MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024; // 8 MB
 
 async function testWebSearch(query) {
   const response = await webAI.models.generateContent({
-    model: 'gemini-3.7-flash',
+    model: "gemini-3.7-flash",
     contents: query,
     config: {
       tools: [
         {
-          googleSearch: {}
-        }
-      ]
-    }
+          googleSearch: {},
+        },
+      ],
+    },
   });
 
   return response;
 }
 
-router.get('/test-web-search', authenticateToken, async (req, res) => {
+router.get("/test-web-search", authenticateToken, async (req, res) => {
   try {
     const result = await testWebSearch(
-      'What is the latest major news in India today?'
+      "What is the latest major news in India today?",
     );
 
     res.json({
       success: true,
-      text: result.text
+      text: result.text,
     });
   } catch (error) {
-    console.error('[WEB SEARCH TEST ERROR]', error);
+    console.error("[WEB SEARCH TEST ERROR]", error);
 
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -365,37 +367,37 @@ Be helpful, friendly, accurate and concise.
  */
 
 function detectAegisLanguage(text) {
-  const value = (text || '').trim().toLowerCase();
+  const value = (text || "").trim().toLowerCase();
 
   if (/[\u0900-\u097F]/.test(value)) {
     if (
       /(आहे|आहेत|म्हणजे|मला|तुला|तुम्ही|मराठी|मध्ये|साठी|कसे|कसं|करायचं|करा|काय|कसा|कशी)/u.test(
-        value
+        value,
       )
     ) {
-      return 'marathi';
+      return "marathi";
     }
 
-    return 'hindi';
+    return "hindi";
   }
 
   if (
     /\b(bhai|kya|hai|hain|mujhe|mera|meri|tum|aap|kaise|kaisa|nahi|nahin|karna|karo|chahiye|bata|batao|kyu|kyon|samjha|samajh|se|ko|ke|ka|ki|me|mein)\b/i.test(
-      value.replace(/\n/g, ' ')
+      value.replace(/\n/g, " "),
     )
   ) {
-    return 'hinglish';
+    return "hinglish";
   }
 
   if (
     /\b(kaay|kay|ahe|aahe|mala|majha|majhi|tula|tumhi|kasa|kashi|nahi|karaycha|karayche|sathi|madhe|mhanje|sang|sanga|kuthe|kadhi)\b/i.test(
-      value.replace(/\n/g, ' ')
+      value.replace(/\n/g, " "),
     )
   ) {
-    return 'marathi-latin';
+    return "marathi-latin";
   }
 
-  return 'english';
+  return "english";
 }
 /**
  * ============================================================
@@ -404,18 +406,18 @@ function detectAegisLanguage(text) {
  */
 
 function cleanAIText(text) {
-  if (!text) return '';
+  if (!text) return "";
 
   return String(text)
-    .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
     .trim();
 }
 
 function getGeminiModel(genAI, modelName) {
   return genAI.getGenerativeModel({
     model: modelName,
-    systemInstruction: AEGIS_SYSTEM_INSTRUCTION
+    systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
   });
 }
 
@@ -428,15 +430,15 @@ function getGeminiModel(genAI, modelName) {
 function getAegisFallbackResponse(userMessage) {
   const language = detectAegisLanguage(userMessage);
 
-  if (language === 'hinglish') {
+  if (language === "hinglish") {
     return `Bhai, abhi AI service temporarily available nahi hai. Thodi der baad dobara try kar.`;
   }
 
-  if (language === 'marathi' || language === 'marathi-latin') {
+  if (language === "marathi" || language === "marathi-latin") {
     return `सध्या AI service temporarily available नाही. कृपया थोड्या वेळाने पुन्हा try करा.`;
   }
 
-  if (language === 'hindi') {
+  if (language === "hindi") {
     return `अभी AI service temporarily available नहीं है। थोड़ी देर बाद फिर से try करें।`;
   }
 
@@ -451,19 +453,19 @@ function getAegisFallbackResponse(userMessage) {
 
 async function generateWebSearchResponse(query) {
   if (!process.env.TAVILY_API_KEY) {
-    throw new Error('TAVILY_API_KEY is not configured.');
+    throw new Error("TAVILY_API_KEY is not configured.");
   }
 
   if (!process.env.GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured.');
+    throw new Error("GEMINI_API_KEY is not configured.");
   }
 
-  console.log('[WEB SEARCH] Searching:', query);
+  console.log("[WEB SEARCH] Searching:", query);
 
   const searchResult = await tavilyClient.search(query, {
-    searchDepth: 'advanced',
+    searchDepth: "advanced",
     maxResults: 6,
-    includeAnswer: false
+    includeAnswer: false,
   });
 
   const results = Array.isArray(searchResult?.results)
@@ -471,31 +473,31 @@ async function generateWebSearchResponse(query) {
     : [];
 
   if (!results.length) {
-    throw new Error('No web search results found.');
+    throw new Error("No web search results found.");
   }
 
   const sourcesText = results
     .map((result, index) => {
       return `
 SOURCE ${index + 1}
-Title: ${result.title || 'Untitled'}
-URL: ${result.url || ''}
+Title: ${result.title || "Untitled"}
+URL: ${result.url || ""}
 Content:
-${result.content || ''}
+${result.content || ""}
 `;
     })
-    .join('\n');
+    .join("\n");
 
   const language = detectAegisLanguage(query);
 
   const languageInstruction =
-    language === 'hinglish'
-      ? 'Answer in natural Hinglish because the user asked in Hinglish.'
-      : language === 'hindi'
-        ? 'Answer in Hindi because the user asked in Hindi.'
-        : language === 'marathi' || language === 'marathi-latin'
-          ? 'Answer in Marathi because the user asked in Marathi.'
-          : 'Answer in English because the user asked in English.';
+    language === "hinglish"
+      ? "Answer in natural Hinglish because the user asked in Hinglish."
+      : language === "hindi"
+        ? "Answer in Hindi because the user asked in Hindi."
+        : language === "marathi" || language === "marathi-latin"
+          ? "Answer in Marathi because the user asked in Marathi."
+          : "Answer in English because the user asked in English.";
 
   const prompt = `
 You are answering a user using fresh web-search information.
@@ -522,25 +524,25 @@ Instructions:
   const model = webAI.models;
 
   const response = await model.generateContent({
-    model: 'gemini-3.7-flash',
+    model: "gemini-3.7-flash",
     contents: prompt,
     config: {
-      systemInstruction: AEGIS_SYSTEM_INSTRUCTION
-    }
+      systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
+    },
   });
 
-  const text = cleanAIText(response?.text || '');
+  const text = cleanAIText(response?.text || "");
 
   if (!text) {
-    throw new Error('Web search AI returned an empty response.');
+    throw new Error("Web search AI returned an empty response.");
   }
 
   return {
     text,
     sources: results.map((result) => ({
-      title: result.title || 'Source',
-      url: result.url || ''
-    }))
+      title: result.title || "Source",
+      url: result.url || "",
+    })),
   };
 }
 
@@ -553,17 +555,17 @@ Instructions:
 async function generateVisionResponse({
   message,
   imageData,
-  imageMimeType = 'image/jpeg'
+  imageMimeType = "image/jpeg",
 }) {
   if (!process.env.GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured.');
+    throw new Error("GEMINI_API_KEY is not configured.");
   }
 
   if (!imageData) {
-    throw new Error('Image data is missing.');
+    throw new Error("Image data is missing.");
   }
 
-  console.log('[VISION] 🖼️ Analyzing image...');
+  console.log("[VISION] 🖼️ Analyzing image...");
 
   const model = webAI.models;
 
@@ -571,7 +573,7 @@ async function generateVisionResponse({
 Analyze the image carefully and answer the user's request.
 
 User request:
-${message || 'Please analyze this image.'}
+${message || "Please analyze this image."}
 
 Important:
 - Describe only what can reasonably be determined from the image.
@@ -584,35 +586,35 @@ Important:
 `;
 
   const response = await model.generateContent({
-    model: 'gemini-3.7-flash',
+    model: "gemini-3.7-flash",
     contents: [
       {
-        role: 'user',
+        role: "user",
         parts: [
           {
-            text: prompt
+            text: prompt,
           },
           {
             inlineData: {
               mimeType: imageMimeType,
-              data: imageData
-            }
-          }
-        ]
-      }
+              data: imageData,
+            },
+          },
+        ],
+      },
     ],
     config: {
-      systemInstruction: AEGIS_SYSTEM_INSTRUCTION
-    }
+      systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
+    },
   });
 
-  const text = cleanAIText(response?.text || '');
+  const text = cleanAIText(response?.text || "");
 
   if (!text) {
-    throw new Error('Vision model returned an empty response.');
+    throw new Error("Vision model returned an empty response.");
   }
 
-  console.log('[VISION] ✅ Image analysis completed.');
+  console.log("[VISION] ✅ Image analysis completed.");
 
   return text;
 }
@@ -634,18 +636,21 @@ Important:
  */
 
 function getFileExtension(fileName) {
-  const name = String(fileName || '');
-  const dotIndex = name.lastIndexOf('.');
+  const name = String(fileName || "");
+  const dotIndex = name.lastIndexOf(".");
 
   if (dotIndex < 0 || dotIndex === name.length - 1) {
-    return '';
+    return "";
   }
 
-  return name.substring(dotIndex + 1).trim().toLowerCase();
+  return name
+    .substring(dotIndex + 1)
+    .trim()
+    .toLowerCase();
 }
 
 function resolveFileMimeType({ fileMimeType, fileName }) {
-  const mime = String(fileMimeType || '')
+  const mime = String(fileMimeType || "")
     .trim()
     .toLowerCase();
 
@@ -653,7 +658,7 @@ function resolveFileMimeType({ fileMimeType, fileName }) {
     return mime;
   }
 
-  return FILE_MIME_BY_EXTENSION[getFileExtension(fileName)] || '';
+  return FILE_MIME_BY_EXTENSION[getFileExtension(fileName)] || "";
 }
 
 function base64ByteLength(base64) {
@@ -663,24 +668,20 @@ function base64ByteLength(base64) {
 
   if (!value) return 0;
 
-  const padding = value.endsWith('==')
-    ? 2
-    : value.endsWith('=')
-      ? 1
-      : 0;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
 
   return Math.floor((value.length * 3) / 4) - padding;
 }
 
 async function extractDocxText(fileData) {
-  const buffer = Buffer.from(fileData, 'base64');
+  const buffer = Buffer.from(fileData, "base64");
 
   const result = await mammoth.extractRawText({ buffer });
 
-  const text = String(result?.value || '').trim();
+  const text = String(result?.value || "").trim();
 
   if (!text) {
-    throw new Error('Could not read any text from the DOCX file.');
+    throw new Error("Could not read any text from the DOCX file.");
   }
 
   return text;
@@ -690,50 +691,46 @@ async function generateFileAnalysisResponse({
   message,
   fileData,
   fileMimeType,
-  fileName
+  fileName,
 }) {
   if (!process.env.GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured.');
+    throw new Error("GEMINI_API_KEY is not configured.");
   }
 
   if (!fileData) {
-    throw new Error('File data is missing.');
+    throw new Error("File data is missing.");
   }
 
   const mimeType = resolveFileMimeType({
     fileMimeType,
-    fileName
+    fileName,
   });
 
   if (!SUPPORTED_FILE_MIME_TYPES.has(mimeType)) {
-    throw new Error(
-      'Unsupported file type. Supported files: PDF, TXT, DOCX.'
-    );
+    throw new Error("Unsupported file type. Supported files: PDF, TXT, DOCX.");
   }
 
   const fileBytes = base64ByteLength(fileData);
 
   if (fileBytes === 0) {
-    throw new Error('The uploaded file is empty.');
+    throw new Error("The uploaded file is empty.");
   }
 
   if (fileBytes > MAX_FILE_SIZE_BYTES) {
-    throw new Error(
-      'File is too large. Maximum size is 8 MB.'
-    );
+    throw new Error("File is too large. Maximum size is 8 MB.");
   }
 
   console.log(
-    '[FILE] 📎 Analyzing file:',
-    fileName || 'uploaded file',
-    `(${mimeType})`
+    "[FILE] 📎 Analyzing file:",
+    fileName || "uploaded file",
+    `(${mimeType})`,
   );
 
   const prompt = `
-Analyze the attached file${fileName ? ` "${fileName}"` : ''} and answer the user's request.
+Analyze the attached file${fileName ? ` "${fileName}"` : ""} and answer the user's request.
 
 User request:
-${message || 'Please analyze this file.'}
+${message || "Please analyze this file."}
 
 Important:
 - Read the file content carefully and answer only based on what is actually in the file.
@@ -753,39 +750,37 @@ Important:
     const docxText = await extractDocxText(fileData);
 
     parts.push({
-      text: `\n\nFile content (from "${fileName || 'document.docx'}"):\n${docxText}`
+      text: `\n\nFile content (from "${fileName || "document.docx"}"):\n${docxText}`,
     });
   } else {
     parts.push({
       inlineData: {
         mimeType,
-        data: fileData
-      }
+        data: fileData,
+      },
     });
   }
 
   const response = await model.generateContent({
-    model: 'gemini-3.7-flash',
+    model: "gemini-3.7-flash",
     contents: [
       {
-        role: 'user',
-        parts
-      }
+        role: "user",
+        parts,
+      },
     ],
     config: {
-      systemInstruction: AEGIS_SYSTEM_INSTRUCTION
-    }
+      systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
+    },
   });
 
-  const text = cleanAIText(response?.text || '');
+  const text = cleanAIText(response?.text || "");
 
   if (!text) {
-    throw new Error(
-      'File analysis model returned an empty response.'
-    );
+    throw new Error("File analysis model returned an empty response.");
   }
 
-  console.log('[FILE] ✅ File analysis completed.');
+  console.log("[FILE] ✅ File analysis completed.");
 
   return text;
 }
@@ -807,11 +802,7 @@ Important:
  * ============================================================
  */
 
-async function generateWithRetry({
-  genAI,
-  messages,
-  userMessage
-}) {
+async function generateWithRetry({ genAI, messages, userMessage }) {
   /**
    * ----------------------------------------------------------
    * PRIMARY — NVIDIA NEMOTRON 3 ULTRA
@@ -819,32 +810,30 @@ async function generateWithRetry({
    */
 
   try {
-    console.log('[AI] 🧠 Trying Nemotron 3 Ultra...');
+    console.log("[AI] 🧠 Trying Nemotron 3 Ultra...");
 
     const completion = await nvidiaAI.chat.completions.create({
-      model: 'nvidia/nemotron-3-ultra-550b-a55b',
+      model: "nvidia/nemotron-3-ultra-550b-a55b",
       messages,
-      max_tokens: 4096
+      max_tokens: 4096,
     });
 
-    const text = cleanAIText(
-      completion?.choices?.[0]?.message?.content || ''
-    );
+    const text = cleanAIText(completion?.choices?.[0]?.message?.content || "");
 
     if (!text) {
-      throw new Error('Nemotron returned an empty response.');
+      throw new Error("Nemotron returned an empty response.");
     }
 
-    console.log('[AI] 🧠 Nemotron 3 Ultra succeeded.');
+    console.log("[AI] 🧠 Nemotron 3 Ultra succeeded.");
 
     return {
       text,
-      provider: 'nemotron'
+      provider: "nemotron",
     };
   } catch (nemotronError) {
     console.error(
-      '[AI] ⚠️ Nemotron failed:',
-      nemotronError?.message || nemotronError
+      "[AI] ⚠️ Nemotron failed:",
+      nemotronError?.message || nemotronError,
     );
   }
 
@@ -855,15 +844,13 @@ async function generateWithRetry({
    */
 
   if (!genAI) {
-    throw new Error(
-      'Gemini API is not configured and Nemotron failed.'
-    );
+    throw new Error("Gemini API is not configured and Nemotron failed.");
   }
 
   const modelsToTry = [
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
-    'gemini-3.5-flash-lite'
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
   ];
 
   for (const modelName of modelsToTry) {
@@ -874,40 +861,36 @@ async function generateWithRetry({
 
       const result = await model.generateContent({
         contents: messages
-          .filter((item) => item.role !== 'system')
+          .filter((item) => item.role !== "system")
           .map((item) => ({
-            role: item.role === 'assistant' ? 'model' : 'user',
+            role: item.role === "assistant" ? "model" : "user",
             parts: [
               {
-                text: item.content
-              }
-            ]
+                text: item.content,
+              },
+            ],
           })),
         generationConfig: {
-          maxOutputTokens: 1024
-        }
+          maxOutputTokens: 1024,
+        },
       });
 
-      const text = cleanAIText(
-        result?.response?.text?.() || ''
-      );
+      const text = cleanAIText(result?.response?.text?.() || "");
 
       if (!text) {
-        throw new Error(
-          `${modelName} returned an empty response.`
-        );
+        throw new Error(`${modelName} returned an empty response.`);
       }
 
       console.log(`[AI] ✅ ${modelName} succeeded.`);
 
       return {
         text,
-        provider: modelName
+        provider: modelName,
       };
     } catch (geminiError) {
       console.error(
         `[AI] ⚠️ ${modelName} failed:`,
-        geminiError?.message || geminiError
+        geminiError?.message || geminiError,
       );
     }
   }
@@ -918,11 +901,11 @@ async function generateWithRetry({
    * ----------------------------------------------------------
    */
 
-  console.log('[AI] 🛡️ Using Aegis fallback response.');
+  console.log("[AI] 🛡️ Using Aegis fallback response.");
 
   return {
     text: getAegisFallbackResponse(userMessage),
-    provider: 'aegis-fallback'
+    provider: "aegis-fallback",
   };
 }
 
@@ -941,12 +924,7 @@ async function generateWithRetry({
  * ============================================================
  */
 
-async function streamWithRetry({
-  genAI,
-  messages,
-  userMessage,
-  onChunk
-}) {
+async function streamWithRetry({ genAI, messages, userMessage, onChunk }) {
   /**
    * ----------------------------------------------------------
    * PROVIDER STREAM IDLE-TIMEOUT
@@ -969,11 +947,7 @@ async function streamWithRetry({
    */
   const AI_STREAM_IDLE_TIMEOUT_MS = 60 * 1000;
 
-  async function consumeStreamWithIdleTimeout({
-    label,
-    cancel,
-    startConsume
-  }) {
+  async function consumeStreamWithIdleTimeout({ label, cancel, startConsume }) {
     let idleTimerId = null;
     let consumePromise = null;
     let rejectIdle = null;
@@ -989,9 +963,9 @@ async function streamWithRetry({
       clearTimeout(idleTimerId);
       idleTimerId = setTimeout(() => {
         const idleError = new Error(
-          `[AI STREAM] ${label} stream idle timeout: no data for ${AI_STREAM_IDLE_TIMEOUT_MS}ms.`
+          `[AI STREAM] ${label} stream idle timeout: no data for ${AI_STREAM_IDLE_TIMEOUT_MS}ms.`,
         );
-        idleError.code = 'AI_STREAM_IDLE_TIMEOUT';
+        idleError.code = "AI_STREAM_IDLE_TIMEOUT";
         rejectIdle(idleError);
       }, AI_STREAM_IDLE_TIMEOUT_MS);
     };
@@ -1000,21 +974,21 @@ async function streamWithRetry({
       consumePromise = Promise.resolve(startConsume(armIdleTimer));
       return await Promise.race([consumePromise, idlePromise]);
     } catch (err) {
-      if (err && err.code === 'AI_STREAM_IDLE_TIMEOUT') {
+      if (err && err.code === "AI_STREAM_IDLE_TIMEOUT") {
         console.warn(
-          `[AI STREAM] ⏱️ ${label} idle timeout (${AI_STREAM_IDLE_TIMEOUT_MS}ms without data) — cancelling stream, continuing fallback chain.`
+          `[AI STREAM] ⏱️ ${label} idle timeout (${AI_STREAM_IDLE_TIMEOUT_MS}ms without data) — cancelling stream, continuing fallback chain.`,
         );
       }
       // Cancel the upstream request via its supported mechanism so the
       // wedged iterator unwinds instead of holding the socket open.
       // Safe no-op when the stream already finished or errored.
-      if (typeof cancel === 'function') {
+      if (typeof cancel === "function") {
         try {
           cancel();
         } catch (cancelError) {
           console.warn(
             `[AI STREAM] ⚠️ Could not cancel ${label} stream:`,
-            cancelError?.message || cancelError
+            cancelError?.message || cancelError,
           );
         }
       }
@@ -1037,16 +1011,16 @@ async function streamWithRetry({
    */
 
   try {
-    console.log('[AI STREAM] 🧠 Trying Nemotron 3 Ultra...');
+    console.log("[AI STREAM] 🧠 Trying Nemotron 3 Ultra...");
 
     const stream = await nvidiaAI.chat.completions.create({
-      model: 'nvidia/nemotron-3-ultra-550b-a55b',
+      model: "nvidia/nemotron-3-ultra-550b-a55b",
       messages,
       max_tokens: 4096,
-      stream: true
+      stream: true,
     });
 
-    let fullText = '';
+    let fullText = "";
 
     // OpenAI SDK Stream exposes `controller` — a public AbortController
     // for the underlying HTTP request (openai v7.8.0,
@@ -1055,13 +1029,13 @@ async function streamWithRetry({
     // Aborting it rejects the SDK's pending reader and ends the stuck
     // iteration cleanly instead of hanging forever.
     const cancelNemotronStream = () => {
-      if (typeof stream.controller?.abort === 'function') {
+      if (typeof stream.controller?.abort === "function") {
         stream.controller.abort();
       }
     };
 
     fullText = await consumeStreamWithIdleTimeout({
-      label: 'Nemotron',
+      label: "Nemotron",
       cancel: cancelNemotronStream,
       startConsume: async (armIdleTimer) => {
         armIdleTimer();
@@ -1071,40 +1045,37 @@ async function streamWithRetry({
           // idle watchdog, even chunks without a content delta.
           armIdleTimer();
 
-          const delta =
-            chunk?.choices?.[0]?.delta?.content || '';
+          const delta = chunk?.choices?.[0]?.delta?.content || "";
 
           if (!delta) continue;
 
           fullText += delta;
 
-          if (typeof onChunk === 'function') {
+          if (typeof onChunk === "function") {
             onChunk(delta);
           }
         }
 
         return fullText;
-      }
+      },
     });
 
     fullText = cleanAIText(fullText);
 
     if (!fullText) {
-      throw new Error(
-        'Nemotron streaming returned an empty response.'
-      );
+      throw new Error("Nemotron streaming returned an empty response.");
     }
 
-    console.log('[AI STREAM] 🧠 Nemotron 3 Ultra succeeded.');
+    console.log("[AI STREAM] 🧠 Nemotron 3 Ultra succeeded.");
 
     return {
       text: fullText,
-      provider: 'nemotron'
+      provider: "nemotron",
     };
   } catch (nemotronError) {
     console.error(
-      '[AI STREAM] ⚠️ Nemotron failed:',
-      nemotronError?.message || nemotronError
+      "[AI STREAM] ⚠️ Nemotron failed:",
+      nemotronError?.message || nemotronError,
     );
   }
 
@@ -1115,34 +1086,30 @@ async function streamWithRetry({
    */
 
   if (!genAI) {
-    throw new Error(
-      'Gemini API is not configured and Nemotron failed.'
-    );
+    throw new Error("Gemini API is not configured and Nemotron failed.");
   }
 
   const modelsToTry = [
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
-    'gemini-3.5-flash-lite'
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
   ];
 
   for (const modelName of modelsToTry) {
     try {
-      console.log(
-        `[AI STREAM] 🔄 Trying Gemini model: ${modelName}`
-      );
+      console.log(`[AI STREAM] 🔄 Trying Gemini model: ${modelName}`);
 
       const model = getGeminiModel(genAI, modelName);
 
       const contents = messages
-        .filter((item) => item.role !== 'system')
+        .filter((item) => item.role !== "system")
         .map((item) => ({
-          role: item.role === 'assistant' ? 'model' : 'user',
+          role: item.role === "assistant" ? "model" : "user",
           parts: [
             {
-              text: item.content
-            }
-          ]
+              text: item.content,
+            },
+          ],
         }));
 
       // @google/generative-ai (v0.24.x, the SDK used by getGeminiModel)
@@ -1159,13 +1126,13 @@ async function streamWithRetry({
         {
           contents,
           generationConfig: {
-            maxOutputTokens: 1024
-          }
+            maxOutputTokens: 1024,
+          },
         },
-        { signal: geminiAbortController.signal }
+        { signal: geminiAbortController.signal },
       );
 
-      let fullText = '';
+      let fullText = "";
 
       fullText = await consumeStreamWithIdleTimeout({
         label: modelName,
@@ -1178,41 +1145,37 @@ async function streamWithRetry({
             // idle watchdog, even chunks without a text delta.
             armIdleTimer();
 
-            const delta = chunk?.text?.() || '';
+            const delta = chunk?.text?.() || "";
 
             if (!delta) continue;
 
             fullText += delta;
 
-            if (typeof onChunk === 'function') {
+            if (typeof onChunk === "function") {
               onChunk(delta);
             }
           }
 
           return fullText;
-        }
+        },
       });
 
       fullText = cleanAIText(fullText);
 
       if (!fullText) {
-        throw new Error(
-          `${modelName} returned an empty streaming response.`
-        );
+        throw new Error(`${modelName} returned an empty streaming response.`);
       }
 
-      console.log(
-        `[AI STREAM] ✅ ${modelName} succeeded.`
-      );
+      console.log(`[AI STREAM] ✅ ${modelName} succeeded.`);
 
       return {
         text: fullText,
-        provider: modelName
+        provider: modelName,
       };
     } catch (geminiError) {
       console.error(
         `[AI STREAM] ⚠️ ${modelName} failed:`,
-        geminiError?.message || geminiError
+        geminiError?.message || geminiError,
       );
     }
   }
@@ -1223,16 +1186,15 @@ async function streamWithRetry({
    * ----------------------------------------------------------
    */
 
-  const fallbackText =
-    getAegisFallbackResponse(userMessage);
+  const fallbackText = getAegisFallbackResponse(userMessage);
 
-  if (typeof onChunk === 'function') {
+  if (typeof onChunk === "function") {
     onChunk(fallbackText);
   }
 
   return {
     text: fallbackText,
-    provider: 'aegis-fallback'
+    provider: "aegis-fallback",
   };
 }
 /**
@@ -1242,7 +1204,7 @@ async function streamWithRetry({
  * ============================================================
  */
 
-router.post('/', async (req, res) => {
+router.post("/", async (req, res) => {
   try {
     const {
       conversationId,
@@ -1251,18 +1213,15 @@ router.post('/', async (req, res) => {
       imageMimeType,
       fileData,
       fileMimeType,
-      fileName
+      fileName,
     } = req.body;
 
-    const cleanMessage =
-      typeof message === 'string'
-        ? message.trim()
-        : '';
+    const cleanMessage = typeof message === "string" ? message.trim() : "";
 
     if (!cleanMessage && !imageData && !fileData) {
       return res.status(400).json({
         success: false,
-        error: 'Message, image or file is required.'
+        error: "Message, image or file is required.",
       });
     }
 
@@ -1275,14 +1234,13 @@ router.post('/', async (req, res) => {
     if (fileData) {
       const resolvedMimeType = resolveFileMimeType({
         fileMimeType,
-        fileName
+        fileName,
       });
 
       if (!SUPPORTED_FILE_MIME_TYPES.has(resolvedMimeType)) {
         return res.status(400).json({
           success: false,
-          error:
-            'Unsupported file type. Supported files: PDF, TXT, DOCX.'
+          error: "Unsupported file type. Supported files: PDF, TXT, DOCX.",
         });
       }
 
@@ -1291,24 +1249,21 @@ router.post('/', async (req, res) => {
       if (fileBytes === 0) {
         return res.status(400).json({
           success: false,
-          error: 'The uploaded file is empty.'
+          error: "The uploaded file is empty.",
         });
       }
 
       if (fileBytes > MAX_FILE_SIZE_BYTES) {
         return res.status(400).json({
           success: false,
-          error:
-            'File is too large. Maximum size is 8 MB.'
+          error: "File is too large. Maximum size is 8 MB.",
         });
       }
     }
 
     const userId = req.user.id;
 
-    console.log(
-      `[CHAT] User ${userId} sent a message`
-    );
+    console.log(`[CHAT] User ${userId} sent a message`);
 
     /**
      * --------------------------------------------------------
@@ -1320,45 +1275,37 @@ router.post('/', async (req, res) => {
 
     if (!activeConversationId) {
       const titleSource =
-        cleanMessage ||
-        (fileData
-          ? 'File Analysis'
-          : 'Image Analysis');
+        cleanMessage || (fileData ? "File Analysis" : "Image Analysis");
 
       const title =
         titleSource.length > 60
           ? `${titleSource.substring(0, 57)}...`
           : titleSource;
 
-      const conversation =
-        await conversationQueries.create(
-          uuidv4(),
-          userId,
-          title
-        );
-
-      activeConversationId =
-        conversation.id;
-
-      console.log(
-        `[CHAT] Created conversation ${activeConversationId}`
+      const conversation = await conversationQueries.create(
+        uuidv4(),
+        userId,
+        title,
       );
+
+      activeConversationId = conversation.id;
+
+      console.log(`[CHAT] Created conversation ${activeConversationId}`);
     } else {
       /**
        * Make sure the conversation belongs
        * to the authenticated user.
        */
 
-      const conversation =
-        await conversationQueries.findById(
-          activeConversationId,
-          userId
-        );
+      const conversation = await conversationQueries.findById(
+        activeConversationId,
+        userId,
+      );
 
       if (!conversation) {
         return res.status(404).json({
           success: false,
-          error: 'Conversation not found.'
+          error: "Conversation not found.",
         });
       }
     }
@@ -1372,21 +1319,18 @@ router.post('/', async (req, res) => {
     const userMessageText =
       cleanMessage ||
       (imageData
-        ? 'Please analyze this image.'
+        ? "Please analyze this image."
         : fileName
           ? `Please analyze the attached file ${fileName}.`
-          : 'Please analyze this file.');
+          : "Please analyze this file.");
 
-    const savedUserMessage =
-      await messageQueries.create(
-        activeConversationId,
-        'user',
-        userMessageText
-      );
-
-    console.log(
-      `[CHAT] Saved user message ${savedUserMessage.id}`
+    const savedUserMessage = await messageQueries.create(
+      activeConversationId,
+      "user",
+      userMessageText,
     );
+
+    console.log(`[CHAT] Saved user message ${savedUserMessage.id}`);
 
     /**
      * --------------------------------------------------------
@@ -1395,27 +1339,19 @@ router.post('/', async (req, res) => {
      */
 
     const history =
-      await messageQueries.findByConversation(
-        activeConversationId
-      );
+      await messageQueries.findByConversation(activeConversationId);
 
-    const recentHistory =
-      Array.isArray(history)
-        ? history.slice(-20)
-        : [];
-
+    const recentHistory = Array.isArray(history) ? history.slice(-20) : [];
+    const memoryContext = await buildMemoryContext(userId, 20);
     const messages = [
       {
-        role: 'system',
-        content: AEGIS_SYSTEM_INSTRUCTION
+        role: "system",
+        content: AEGIS_SYSTEM_INSTRUCTION + memoryContext,
       },
       ...recentHistory.map((item) => ({
-        role:
-          item.role === 'assistant'
-            ? 'assistant'
-            : 'user',
-        content: item.content || ''
-      }))
+        role: item.role === "assistant" ? "assistant" : "user",
+        content: item.content || "",
+      })),
     ];
 
     /**
@@ -1424,14 +1360,9 @@ router.post('/', async (req, res) => {
      * --------------------------------------------------------
      */
 
-    const geminiApiKey =
-      process.env.GEMINI_API_KEY;
+    const geminiApiKey = process.env.GEMINI_API_KEY;
 
-    const genAI = geminiApiKey
-      ? new GoogleGenerativeAI(
-          geminiApiKey
-        )
-      : null;
+    const genAI = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
 
     /**
      * --------------------------------------------------------
@@ -1443,11 +1374,11 @@ router.post('/', async (req, res) => {
       !fileData &&
       !imageData &&
       /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(
-        cleanMessage
+        cleanMessage,
       );
 
-    let aiText = '';
-    let provider = 'unknown';
+    let aiText = "";
+    let provider = "unknown";
     let sources = [];
 
     /**
@@ -1457,70 +1388,46 @@ router.post('/', async (req, res) => {
      */
 
     if (fileData) {
-      console.log(
-        '[CHAT] 📎 File request detected.'
-      );
+      console.log("[CHAT] 📎 File request detected.");
 
-      aiText =
-        await generateFileAnalysisResponse({
-          message:
-            cleanMessage ||
-            'Please analyze this file.',
-          fileData,
-          fileMimeType,
-          fileName: fileName || 'uploaded file'
-        });
+      aiText = await generateFileAnalysisResponse({
+        message: cleanMessage || "Please analyze this file.",
+        fileData,
+        fileMimeType,
+        fileName: fileName || "uploaded file",
+      });
 
-      provider = 'gemini-file';
-    }
+      provider = "gemini-file";
+    } else if (imageData) {
+      console.log("[CHAT] 🖼️ Image request detected.");
 
-    else if (imageData) {
-      console.log(
-        '[CHAT] 🖼️ Image request detected.'
-      );
+      aiText = await generateVisionResponse({
+        message: cleanMessage || "Please analyze this image.",
+        imageData,
+        imageMimeType: imageMimeType || "image/jpeg",
+      });
 
-      aiText =
-        await generateVisionResponse({
-          message:
-            cleanMessage ||
-            'Please analyze this image.',
-          imageData,
-          imageMimeType:
-            imageMimeType || 'image/jpeg'
-        });
-
-      provider = 'gemini-vision';
-    }
-
-    /**
-     * --------------------------------------------------------
-     * WEB SEARCH
-     * --------------------------------------------------------
-     */
-
-    else if (needsWebSearch) {
-      console.log(
-        '[CHAT] 🌐 Web search request detected.'
-      );
+      provider = "gemini-vision";
+    } else if (needsWebSearch) {
+      /**
+       * --------------------------------------------------------
+       * WEB SEARCH
+       * --------------------------------------------------------
+       */
+      console.log("[CHAT] 🌐 Web search request detected.");
 
       try {
-        const webResponse =
-          await generateWebSearchResponse(
-            cleanMessage
-          );
+        const webResponse = await generateWebSearchResponse(cleanMessage);
 
-        aiText =
-          webResponse.text;
+        aiText = webResponse.text;
 
-        sources =
-          webResponse.sources || [];
+        sources = webResponse.sources || [];
 
-        provider = 'web-search';
+        provider = "web-search";
       } catch (webError) {
         console.error(
-          '[CHAT] ⚠️ Web search failed:',
-          webError?.message ||
-            webError
+          "[CHAT] ⚠️ Web search failed:",
+          webError?.message || webError,
         );
 
         /**
@@ -1528,42 +1435,31 @@ router.post('/', async (req, res) => {
          * normal AI instead of returning an error.
          */
 
-        const result =
-          await generateWithRetry({
-            genAI,
-            messages,
-            userMessage:
-              cleanMessage
-          });
-
-        aiText =
-          result.text;
-
-        provider =
-          result.provider;
-      }
-    }
-
-    /**
-     * --------------------------------------------------------
-     * NORMAL AI CHAT
-     * --------------------------------------------------------
-     */
-
-    else {
-      const result =
-        await generateWithRetry({
+        const result = await generateWithRetry({
           genAI,
           messages,
-          userMessage:
-            cleanMessage
+          userMessage: cleanMessage,
         });
 
-      aiText =
-        result.text;
+        aiText = result.text;
 
-      provider =
-        result.provider;
+        provider = result.provider;
+      }
+    } else {
+      /**
+       * --------------------------------------------------------
+       * NORMAL AI CHAT
+       * --------------------------------------------------------
+       */
+      const result = await generateWithRetry({
+        genAI,
+        messages,
+        userMessage: cleanMessage,
+      });
+
+      aiText = result.text;
+
+      provider = result.provider;
     }
 
     /**
@@ -1573,13 +1469,9 @@ router.post('/', async (req, res) => {
      */
 
     if (!aiText) {
-      aiText =
-        getAegisFallbackResponse(
-          cleanMessage
-        );
+      aiText = getAegisFallbackResponse(cleanMessage);
 
-      provider =
-        'aegis-fallback';
+      provider = "aegis-fallback";
     }
 
     /**
@@ -1588,16 +1480,13 @@ router.post('/', async (req, res) => {
      * --------------------------------------------------------
      */
 
-    const savedAssistantMessage =
-      await messageQueries.create(
-        activeConversationId,
-        'assistant',
-        aiText
-      );
-
-    console.log(
-      `[CHAT] Saved assistant message ${savedAssistantMessage.id}`
+    const savedAssistantMessage = await messageQueries.create(
+      activeConversationId,
+      "assistant",
+      aiText,
     );
+
+    console.log(`[CHAT] Saved assistant message ${savedAssistantMessage.id}`);
 
     /**
      * --------------------------------------------------------
@@ -1606,19 +1495,13 @@ router.post('/', async (req, res) => {
      */
 
     try {
-      if (
-        typeof conversationQueries.updateTimestamp ===
-        'function'
-      ) {
-        await conversationQueries.updateTimestamp(
-          activeConversationId
-        );
+      if (typeof conversationQueries.updateTimestamp === "function") {
+        await conversationQueries.updateTimestamp(activeConversationId);
       }
     } catch (timestampError) {
       console.error(
-        '[CHAT] ⚠️ Failed to update conversation timestamp:',
-        timestampError?.message ||
-          timestampError
+        "[CHAT] ⚠️ Failed to update conversation timestamp:",
+        timestampError?.message || timestampError,
       );
     }
 
@@ -1631,35 +1514,27 @@ router.post('/', async (req, res) => {
     return res.json({
       success: true,
 
-      conversationId:
-        activeConversationId,
+      conversationId: activeConversationId,
 
       message: {
-        id:
-          savedAssistantMessage.id,
-        role: 'assistant',
-        content: aiText
+        id: savedAssistantMessage.id,
+        role: "assistant",
+        content: aiText,
       },
 
       provider,
 
-      sources
+      sources,
     });
   } catch (error) {
-    console.error(
-      '[CHAT ERROR]',
-      error
-    );
+    console.error("[CHAT ERROR]", error);
 
     return res.status(500).json({
       success: false,
-      error:
-        error?.message ||
-        'Failed to generate AI response.'
+      error: error?.message || "Failed to generate AI response.",
     });
   }
 });
-
 
 /**
  * ============================================================
@@ -1668,57 +1543,40 @@ router.post('/', async (req, res) => {
  * ============================================================
  */
 
-router.get(
-  '/:conversationId',
-  async (req, res) => {
-    try {
-      const {
-        conversationId
-      } = req.params;
+router.get("/:conversationId", async (req, res) => {
+  try {
+    const { conversationId } = req.params;
 
-      const userId =
-        req.user.id;
+    const userId = req.user.id;
 
-      const conversation =
-        await conversationQueries.findById(
-          conversationId,
-          userId
-        );
+    const conversation = await conversationQueries.findById(
+      conversationId,
+      userId,
+    );
 
-      if (!conversation) {
-        return res.status(404).json({
-          success: false,
-          error:
-            'Conversation not found.'
-        });
-      }
-
-      const messages =
-        await messageQueries.findByConversation(
-          conversationId
-        );
-
-      return res.json({
-        success: true,
-        conversation,
-        messages
-      });
-    } catch (error) {
-      console.error(
-        '[GET CONVERSATION ERROR]',
-        error
-      );
-
-      return res.status(500).json({
+    if (!conversation) {
+      return res.status(404).json({
         success: false,
-        error:
-          error?.message ||
-          'Failed to load conversation.'
+        error: "Conversation not found.",
       });
     }
-  }
-);
 
+    const messages = await messageQueries.findByConversation(conversationId);
+
+    return res.json({
+      success: true,
+      conversation,
+      messages,
+    });
+  } catch (error) {
+    console.error("[GET CONVERSATION ERROR]", error);
+
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to load conversation.",
+    });
+  }
+});
 
 /**
  * ============================================================
@@ -1727,57 +1585,39 @@ router.get(
  * ============================================================
  */
 
-router.delete(
-  '/:conversationId',
-  async (req, res) => {
-    try {
-      const {
-        conversationId
-      } = req.params;
+router.delete("/:conversationId", async (req, res) => {
+  try {
+    const { conversationId } = req.params;
 
-      const userId =
-        req.user.id;
+    const userId = req.user.id;
 
-      const conversation =
-        await conversationQueries.findById(
-          conversationId,
-          userId
-        );
+    const conversation = await conversationQueries.findById(
+      conversationId,
+      userId,
+    );
 
-      if (!conversation) {
-        return res.status(404).json({
-          success: false,
-          error:
-            'Conversation not found.'
-        });
-      }
-
-      await conversationQueries.delete(
-        conversationId,
-        userId
-      );
-
-      return res.json({
-        success: true,
-        message:
-          'Conversation deleted successfully.'
-      });
-    } catch (error) {
-      console.error(
-        '[DELETE CONVERSATION ERROR]',
-        error
-      );
-
-      return res.status(500).json({
+    if (!conversation) {
+      return res.status(404).json({
         success: false,
-        error:
-          error?.message ||
-          'Failed to delete conversation.'
+        error: "Conversation not found.",
       });
     }
-  }
-);
 
+    await conversationQueries.delete(conversationId, userId);
+
+    return res.json({
+      success: true,
+      message: "Conversation deleted successfully.",
+    });
+  } catch (error) {
+    console.error("[DELETE CONVERSATION ERROR]", error);
+
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to delete conversation.",
+    });
+  }
+});
 
 /**
  * ============================================================
@@ -1786,444 +1626,297 @@ router.delete(
  * ============================================================
  */
 
-router.post(
-  '/stream',
-  async (req, res) => {
-    try {
-      const {
-        conversationId,
-        message,
-        imageData,
-        imageMimeType
-      } = req.body;
+router.post("/stream", async (req, res) => {
+  try {
+    const { conversationId, message, imageData, imageMimeType } = req.body;
 
-      const cleanMessage =
-        typeof message === 'string'
-          ? message.trim()
-          : '';
+    const cleanMessage = typeof message === "string" ? message.trim() : "";
 
-      if (!cleanMessage && !imageData) {
-        return res.status(400).json({
-          success: false,
-          error:
-            'Message or image is required.'
-        });
-      }
+    if (!cleanMessage && !imageData) {
+      return res.status(400).json({
+        success: false,
+        error: "Message or image is required.",
+      });
+    }
 
-      const userId =
-        req.user.id;
+    const userId = req.user.id;
 
-      console.log(
-        `[AI STREAM] User ${userId} started streaming`
+    console.log(`[AI STREAM] User ${userId} started streaming`);
+
+    /**
+     * ------------------------------------------------------
+     * CONVERSATION
+     * ------------------------------------------------------
+     */
+
+    let activeConversationId = conversationId;
+
+    if (!activeConversationId) {
+      const titleSource = cleanMessage || "Image Analysis";
+
+      const title =
+        titleSource.length > 60
+          ? `${titleSource.substring(0, 57)}...`
+          : titleSource;
+
+      const conversation = await conversationQueries.create(
+        uuidv4(),
+        userId,
+        title,
       );
 
-      /**
-       * ------------------------------------------------------
-       * CONVERSATION
-       * ------------------------------------------------------
-       */
-
-      let activeConversationId =
-        conversationId;
-
-      if (!activeConversationId) {
-        const titleSource =
-          cleanMessage ||
-          'Image Analysis';
-
-        const title =
-          titleSource.length > 60
-            ? `${titleSource.substring(0, 57)}...`
-            : titleSource;
-
-        const conversation =
-          await conversationQueries.create(
-            uuidv4(),
-            userId,
-            title
-          );
-
-        activeConversationId =
-          conversation.id;
-      } else {
-        const conversation =
-          await conversationQueries.findById(
-            activeConversationId,
-            userId
-          );
-
-        if (!conversation) {
-          return res.status(404).json({
-            success: false,
-            error:
-              'Conversation not found.'
-          });
-        }
-      }
-
-      /**
-       * ------------------------------------------------------
-       * SAVE USER MESSAGE
-       * ------------------------------------------------------
-       */
-
-      const userMessageText =
-        cleanMessage ||
-        'Please analyze this image.';
-
-      await messageQueries.create(
+      activeConversationId = conversation.id;
+    } else {
+      const conversation = await conversationQueries.findById(
         activeConversationId,
-        'user',
-        userMessageText
+        userId,
       );
 
-      /**
-       * ------------------------------------------------------
-       * LOAD HISTORY
-       * ------------------------------------------------------
-       */
-
-      const history =
-        await messageQueries.findByConversation(
-          activeConversationId
-        );
-
-      const recentHistory =
-        Array.isArray(history)
-          ? history.slice(-20)
-          : [];
-
-      const messages = [
-        {
-          role: 'system',
-          content:
-            AEGIS_SYSTEM_INSTRUCTION
-        },
-        ...recentHistory.map(
-          (item) => ({
-            role:
-              item.role === 'assistant'
-                ? 'assistant'
-                : 'user',
-            content:
-              item.content || ''
-          })
-        )
-      ];
-
-      /**
-       * ------------------------------------------------------
-       * GEMINI CONFIG
-       * ------------------------------------------------------
-       */
-
-      const geminiApiKey =
-        process.env.GEMINI_API_KEY;
-
-      const genAI =
-        geminiApiKey
-          ? new GoogleGenerativeAI(
-              geminiApiKey
-            )
-          : null;
-
-      /**
-       * ------------------------------------------------------
-       * RESPONSE HEADERS
-       * ------------------------------------------------------
-       */
-
-      res.status(200);
-
-      res.setHeader(
-        'Content-Type',
-        'text/event-stream'
-      );
-
-      res.setHeader(
-        'Cache-Control',
-        'no-cache, no-transform'
-      );
-
-      res.setHeader(
-        'Connection',
-        'keep-alive'
-      );
-
-      res.setHeader(
-        'X-Accel-Buffering',
-        'no'
-      );
-
-      if (
-        typeof res.flushHeaders ===
-        'function'
-      ) {
-        res.flushHeaders();
-      }
-
-      /**
-       * ------------------------------------------------------
-       * SEND SSE EVENT
-       * ------------------------------------------------------
-       */
-
-      const sendEvent = (
-        event,
-        data
-      ) => {
-        res.write(
-          `event: ${event}\n`
-        );
-
-        res.write(
-          `data: ${JSON.stringify(
-            data
-          )}\n\n`
-        );
-      };
-
-      /**
-       * ------------------------------------------------------
-       * IMAGE STREAM
-       * ------------------------------------------------------
-       */
-
-      if (imageData) {
-        console.log(
-          '[AI STREAM] 🖼️ Image analysis request.'
-        );
-
-        try {
-          const aiText =
-            await generateVisionResponse({
-              message:
-                cleanMessage ||
-                'Please analyze this image.',
-              imageData,
-              imageMimeType:
-                imageMimeType ||
-                'image/jpeg'
-            });
-
-          sendEvent(
-            'chunk',
-            {
-              content: aiText
-            }
-          );
-
-          await messageQueries.create(
-            activeConversationId,
-            'assistant',
-            aiText
-          );
-
-          sendEvent(
-            'done',
-            {
-              conversationId:
-                activeConversationId,
-              provider:
-                'gemini-vision'
-            }
-          );
-
-          return res.end();
-        } catch (visionError) {
-          console.error(
-            '[AI STREAM] Vision error:',
-            visionError
-          );
-
-          sendEvent(
-            'error',
-            {
-              message:
-                visionError?.message ||
-                'Image analysis failed.'
-            }
-          );
-
-          return res.end();
-        }
-      }
-
-      /**
-       * ------------------------------------------------------
-       * WEB SEARCH STREAM
-       * ------------------------------------------------------
-       */
-
-      const needsWebSearch =
-        /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(
-          cleanMessage
-        );
-
-      if (needsWebSearch) {
-        console.log(
-          '[AI STREAM] 🌐 Web search request detected.'
-        );
-
-        try {
-          const webResponse =
-            await generateWebSearchResponse(
-              cleanMessage
-            );
-
-          sendEvent(
-            'chunk',
-            {
-              content:
-                webResponse.text
-            }
-          );
-
-          await messageQueries.create(
-            activeConversationId,
-            'assistant',
-            webResponse.text
-          );
-
-          sendEvent(
-            'done',
-            {
-              conversationId:
-                activeConversationId,
-              provider:
-                'web-search',
-              sources:
-                webResponse.sources || []
-            }
-          );
-
-          return res.end();
-        } catch (webError) {
-          console.error(
-            '[AI STREAM] ⚠️ Web search failed:',
-            webError?.message ||
-              webError
-          );
-
-          /**
-           * Continue with normal AI
-           * if web search fails.
-           */
-        }
-      }
-
-      /**
-       * ------------------------------------------------------
-       * NORMAL STREAM
-       * ------------------------------------------------------
-       */
-
-      let streamedText = '';
-
-      const result =
-        await streamWithRetry({
-          genAI,
-          messages,
-          userMessage:
-            cleanMessage,
-          onChunk: (chunk) => {
-            streamedText += chunk;
-
-            sendEvent(
-              'chunk',
-              {
-                content: chunk
-              }
-            );
-          }
-        });
-
-      /**
-       * ------------------------------------------------------
-       * SAVE COMPLETE ASSISTANT MESSAGE
-       * ------------------------------------------------------
-       */
-
-      const finalText =
-        cleanAIText(
-          streamedText ||
-            result.text ||
-            ''
-        );
-
-      if (!finalText) {
-        throw new Error(
-          'AI returned an empty response.'
-        );
-      }
-
-      await messageQueries.create(
-        activeConversationId,
-        'assistant',
-        finalText
-      );
-
-      /**
-       * ------------------------------------------------------
-       * DONE EVENT
-       * ------------------------------------------------------
-       */
-
-      sendEvent(
-        'done',
-        {
-          conversationId:
-            activeConversationId,
-
-          provider:
-            result.provider
-        }
-      );
-
-      return res.end();
-    } catch (error) {
-      console.error(
-        '[AI STREAM ERROR]',
-        error
-      );
-
-      if (!res.headersSent) {
-        return res.status(500).json({
+      if (!conversation) {
+        return res.status(404).json({
           success: false,
-          error:
-            error?.message ||
-            'Streaming failed.'
+          error: "Conversation not found.",
         });
-      }
-
-      try {
-        res.write(
-          `event: error\n`
-        );
-
-        res.write(
-          `data: ${JSON.stringify({
-            message:
-              error?.message ||
-              'Streaming failed.'
-          })}\n\n`
-        );
-
-        res.end();
-      } catch (streamError) {
-        console.error(
-          '[AI STREAM CLOSE ERROR]',
-          streamError
-        );
-
-        try {
-          res.end();
-        } catch {}
       }
     }
-  }
-);
 
+    /**
+     * ------------------------------------------------------
+     * SAVE USER MESSAGE
+     * ------------------------------------------------------
+     */
+
+    const userMessageText = cleanMessage || "Please analyze this image.";
+
+    await messageQueries.create(activeConversationId, "user", userMessageText);
+
+    /**
+     * ------------------------------------------------------
+     * LOAD HISTORY
+     * ------------------------------------------------------
+     */
+
+    const history =
+      await messageQueries.findByConversation(activeConversationId);
+
+    const recentHistory = Array.isArray(history) ? history.slice(-20) : [];
+    const memoryContext = await buildMemoryContext(userId, 20);
+    const messages = [
+      {
+        role: "system",
+        content: AEGIS_SYSTEM_INSTRUCTION + memoryContext,
+      },
+      ...recentHistory.map((item) => ({
+        role: item.role === "assistant" ? "assistant" : "user",
+        content: item.content || "",
+      })),
+    ];
+
+    /**
+     * ------------------------------------------------------
+     * GEMINI CONFIG
+     * ------------------------------------------------------
+     */
+
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+
+    const genAI = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
+
+    /**
+     * ------------------------------------------------------
+     * RESPONSE HEADERS
+     * ------------------------------------------------------
+     */
+
+    res.status(200);
+
+    res.setHeader("Content-Type", "text/event-stream");
+
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+
+    res.setHeader("Connection", "keep-alive");
+
+    res.setHeader("X-Accel-Buffering", "no");
+
+    if (typeof res.flushHeaders === "function") {
+      res.flushHeaders();
+    }
+
+    /**
+     * ------------------------------------------------------
+     * SEND SSE EVENT
+     * ------------------------------------------------------
+     */
+
+    const sendEvent = (event, data) => {
+      res.write(`event: ${event}\n`);
+
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    /**
+     * ------------------------------------------------------
+     * IMAGE STREAM
+     * ------------------------------------------------------
+     */
+
+    if (imageData) {
+      console.log("[AI STREAM] 🖼️ Image analysis request.");
+
+      try {
+        const aiText = await generateVisionResponse({
+          message: cleanMessage || "Please analyze this image.",
+          imageData,
+          imageMimeType: imageMimeType || "image/jpeg",
+        });
+
+        sendEvent("chunk", {
+          content: aiText,
+        });
+
+        await messageQueries.create(activeConversationId, "assistant", aiText);
+
+        sendEvent("done", {
+          conversationId: activeConversationId,
+          provider: "gemini-vision",
+        });
+
+        return res.end();
+      } catch (visionError) {
+        console.error("[AI STREAM] Vision error:", visionError);
+
+        sendEvent("error", {
+          message: visionError?.message || "Image analysis failed.",
+        });
+
+        return res.end();
+      }
+    }
+
+    /**
+     * ------------------------------------------------------
+     * WEB SEARCH STREAM
+     * ------------------------------------------------------
+     */
+
+    const needsWebSearch =
+      /latest|today|news|current|recent|weather|price|stock|score|live|2026/i.test(
+        cleanMessage,
+      );
+
+    if (needsWebSearch) {
+      console.log("[AI STREAM] 🌐 Web search request detected.");
+
+      try {
+        const webResponse = await generateWebSearchResponse(cleanMessage);
+
+        sendEvent("chunk", {
+          content: webResponse.text,
+        });
+
+        await messageQueries.create(
+          activeConversationId,
+          "assistant",
+          webResponse.text,
+        );
+
+        sendEvent("done", {
+          conversationId: activeConversationId,
+          provider: "web-search",
+          sources: webResponse.sources || [],
+        });
+
+        return res.end();
+      } catch (webError) {
+        console.error(
+          "[AI STREAM] ⚠️ Web search failed:",
+          webError?.message || webError,
+        );
+
+        /**
+         * Continue with normal AI
+         * if web search fails.
+         */
+      }
+    }
+
+    /**
+     * ------------------------------------------------------
+     * NORMAL STREAM
+     * ------------------------------------------------------
+     */
+
+    let streamedText = "";
+
+    const result = await streamWithRetry({
+      genAI,
+      messages,
+      userMessage: cleanMessage,
+      onChunk: (chunk) => {
+        streamedText += chunk;
+
+        sendEvent("chunk", {
+          content: chunk,
+        });
+      },
+    });
+
+    /**
+     * ------------------------------------------------------
+     * SAVE COMPLETE ASSISTANT MESSAGE
+     * ------------------------------------------------------
+     */
+
+    const finalText = cleanAIText(streamedText || result.text || "");
+
+    if (!finalText) {
+      throw new Error("AI returned an empty response.");
+    }
+
+    await messageQueries.create(activeConversationId, "assistant", finalText);
+
+    /**
+     * ------------------------------------------------------
+     * DONE EVENT
+     * ------------------------------------------------------
+     */
+
+    sendEvent("done", {
+      conversationId: activeConversationId,
+
+      provider: result.provider,
+    });
+
+    return res.end();
+  } catch (error) {
+    console.error("[AI STREAM ERROR]", error);
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Streaming failed.",
+      });
+    }
+
+    try {
+      res.write(`event: error\n`);
+
+      res.write(
+        `data: ${JSON.stringify({
+          message: error?.message || "Streaming failed.",
+        })}\n\n`,
+      );
+
+      res.end();
+    } catch (streamError) {
+      console.error("[AI STREAM CLOSE ERROR]", streamError);
+
+      try {
+        res.end();
+      } catch {}
+    }
+  }
+});
 
 /**
  * ============================================================

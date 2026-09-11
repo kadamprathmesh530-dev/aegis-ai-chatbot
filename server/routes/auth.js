@@ -55,7 +55,7 @@ router.post("/google/start", async (req, res) => {
     loginCodes.set(loginCode, {
       status: "pending",
       verifier: codeVerifier,
-      expires_ms: Date.now() + 5 * 60 * 1000,
+      expiresAt_ms: Date.now() + 5 * 60 * 1000,
       token: null,
       user: null,
       consumed: false,
@@ -906,8 +906,7 @@ router.get("/google/callback", async (req, res) => {
     }
 
     const returnUrl =
-      "aegisaiapp://oauth2callback?loginCode=" +
-      encodeURIComponent(loginCode);
+      "aegisaiapp:///oauth2callback?loginCode=" + encodeURIComponent(loginCode);
 
     let user = await userQueries.getByGoogleId(sub);
 

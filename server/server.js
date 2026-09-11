@@ -1,10 +1,10 @@
-require('dotenv').config();
-const express = require('express');
-const path = require('path');
-const cors = require('cors');
-const helmet = require('helmet');
-const cookieParser = require('cookie-parser');
-const rateLimit = require('express-rate-limit');
+require("dotenv").config();
+const express = require("express");
+const path = require("path");
+const cors = require("cors");
+const helmet = require("helmet");
+const cookieParser = require("cookie-parser");
+const rateLimit = require("express-rate-limit");
 
 // database.js initializes the schema and seeds the admin user itself
 // (via the module-level `databaseReady` promise, exported as `pool`/`db`
@@ -12,19 +12,20 @@ const rateLimit = require('express-rate-limit');
 // Requiring it here is enough to kick that off — do not call
 // initDatabase() again, since that would start a second concurrent
 // connect/init cycle.
-require('./db/database');
+require("./db/database");
 
-const authRoutes = require('./routes/auth');
-const conversationRoutes = require('./routes/conversations');
-const chatRoutes = require('./routes/chat');
-const adminRoutes = require('./routes/admin');
+const authRoutes = require("./routes/auth");
+const conversationRoutes = require("./routes/conversations");
+const chatRoutes = require("./routes/chat");
+const memoryRoutes = require("./routes/memory");
+const adminRoutes = require("./routes/admin");
 
 // ElevenLabs TTS
-const ttsRoutes = require('./routes/tts');
+const ttsRoutes = require("./routes/tts");
 
 const app = express();
 
-app.set('trust proxy', 1);
+app.set("trust proxy", 1);
 
 const PORT = process.env.PORT || 3000;
 
@@ -41,50 +42,40 @@ app.use(
         scriptSrc: [
           "'self'",
           "'unsafe-inline'",
-          'https://cdn.jsdelivr.net',
-          'https://cdnjs.cloudflare.com',
-          'https://accounts.google.com'
+          "https://cdn.jsdelivr.net",
+          "https://cdnjs.cloudflare.com",
+          "https://accounts.google.com",
         ],
 
         styleSrc: [
           "'self'",
           "'unsafe-inline'",
-          'https://fonts.googleapis.com',
-          'https://cdnjs.cloudflare.com',
-          'https://cdn.jsdelivr.net',
-          'https://accounts.google.com'
+          "https://fonts.googleapis.com",
+          "https://cdnjs.cloudflare.com",
+          "https://cdn.jsdelivr.net",
+          "https://accounts.google.com",
         ],
 
         fontSrc: [
           "'self'",
-          'https://fonts.gstatic.com',
-          'https://cdnjs.cloudflare.com'
+          "https://fonts.gstatic.com",
+          "https://cdnjs.cloudflare.com",
         ],
 
-        imgSrc: [
-          "'self'",
-          'data:',
-          'https:'
-        ],
+        imgSrc: ["'self'", "data:", "https:"],
 
-        frameSrc: [
-          "'self'",
-          'https://accounts.google.com'
-        ],
+        frameSrc: ["'self'", "https://accounts.google.com"],
 
-        connectSrc: [
-          "'self'",
-          'https://accounts.google.com'
-        ]
-      }
+        connectSrc: ["'self'", "https://accounts.google.com"],
+      },
     },
 
     crossOriginOpenerPolicy: {
-      policy: 'same-origin-allow-popups'
+      policy: "same-origin-allow-popups",
     },
 
-    crossOriginEmbedderPolicy: false
-  })
+    crossOriginEmbedderPolicy: false,
+  }),
 );
 
 // =====================================================
@@ -94,8 +85,8 @@ app.use(
 app.use(
   cors({
     origin: true,
-    credentials: true
-  })
+    credentials: true,
+  }),
 );
 
 app.use(cookieParser());
@@ -104,14 +95,14 @@ app.use(
   express.json({
     // 15 MB so uploaded files (Base64 in JSON) can be accepted.
     // Client-side file limit is 8 MB raw, ~10.7 MB as Base64.
-    limit: '15mb'
-  })
+    limit: "15mb",
+  }),
 );
 
 app.use(
   express.urlencoded({
-    extended: true
-  })
+    extended: true,
+  }),
 );
 
 // =====================================================
@@ -129,26 +120,25 @@ const authLimiter = rateLimit({
 
   message: {
     success: false,
-    error:
-      'Too many authentication attempts. Please try again in 15 minutes.'
-  }
+    error: "Too many authentication attempts. Please try again in 15 minutes.",
+  },
 });
 
-app.use('/api/auth/login', authLimiter);
+app.use("/api/auth/login", authLimiter);
 
-app.use('/api/auth/register', authLimiter);
+app.use("/api/auth/register", authLimiter);
 
 // =====================================================
 // API ROUTES
 // =====================================================
 
-app.use('/api/auth', authRoutes);
+app.use("/api/auth", authRoutes);
 
-app.use('/api/conversations', conversationRoutes);
+app.use("/api/conversations", conversationRoutes);
 
-app.use('/api/chat', chatRoutes);
-
-app.use('/api/admin', adminRoutes);
+app.use("/api/chat", chatRoutes);
+app.use("/api/memory", memoryRoutes);
+app.use("/api/admin", adminRoutes);
 
 // =====================================================
 // ELEVENLABS NATURAL VOICE / TTS
@@ -179,16 +169,16 @@ app.use('/api/admin', adminRoutes);
 // It is NEVER exposed to the mobile app.
 // =====================================================
 
-app.use('/api/tts', ttsRoutes);
+app.use("/api/tts", ttsRoutes);
 
 // =====================================================
 // HEALTH CHECK
 // =====================================================
 
-app.get('/api/health', (req, res) => {
+app.get("/api/health", (req, res) => {
   res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString()
+    status: "ok",
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -197,58 +187,30 @@ app.get('/api/health', (req, res) => {
 // =====================================================
 
 app.get(
-  [
-    '/css/style.css',
-    '/css/styles.css',
-    '/style.css',
-    '/styles.css'
-  ],
+  ["/css/style.css", "/css/styles.css", "/style.css", "/styles.css"],
   (req, res) => {
-    res.type('text/css');
+    res.type("text/css");
 
-    res.sendFile(
-      path.join(
-        __dirname,
-        '../public/css/style.css'
-      )
-    );
-  }
+    res.sendFile(path.join(__dirname, "../public/css/style.css"));
+  },
 );
 
 // =====================================================
 // STATIC FRONTEND
 // =====================================================
 
-app.use(
-  express.static(
-    path.join(
-      __dirname,
-      '../public'
-    )
-  )
-);
+app.use(express.static(path.join(__dirname, "../public")));
 
 // =====================================================
 // SPA FALLBACK
 // =====================================================
 
-app.get('*', (req, res) => {
-  if (
-    req.path.includes('.') &&
-    !req.path.endsWith('.html')
-  ) {
-    return res
-      .status(404)
-      .type('text/plain')
-      .send('Resource not found');
+app.get("*", (req, res) => {
+  if (req.path.includes(".") && !req.path.endsWith(".html")) {
+    return res.status(404).type("text/plain").send("Resource not found");
   }
 
-  res.sendFile(
-    path.join(
-      __dirname,
-      '../public/index.html'
-    )
-  );
+  res.sendFile(path.join(__dirname, "../public/index.html"));
 });
 
 // =====================================================
@@ -256,20 +218,15 @@ app.get('*', (req, res) => {
 // =====================================================
 
 app.use((err, req, res, next) => {
-  console.error(
-    'Unhandled Error:',
-    err
-  );
+  console.error("Unhandled Error:", err);
 
-  res.status(
-    err.status || 500
-  ).json({
+  res.status(err.status || 500).json({
     success: false,
 
     error:
-      process.env.NODE_ENV === 'production'
-        ? 'Internal server error'
-        : err.message
+      process.env.NODE_ENV === "production"
+        ? "Internal server error"
+        : err.message,
   });
 });
 
@@ -278,41 +235,25 @@ app.use((err, req, res, next) => {
 // =====================================================
 
 app.listen(PORT, () => {
-  console.log(
-    `=========================================`
-  );
+  console.log(`=========================================`);
 
-  console.log(
-    `  Secure AI Chatbot Application Running  `
-  );
+  console.log(`  Secure AI Chatbot Application Running  `);
 
-  console.log(
-    `  URL: http://localhost:${PORT}          `
-  );
+  console.log(`  URL: http://localhost:${PORT}          `);
 
-  console.log(
-    `  Environment: ${
-      process.env.NODE_ENV || 'development'
-    }`
-  );
+  console.log(`  Environment: ${process.env.NODE_ENV || "development"}`);
 
   console.log(
     `  ElevenLabs TTS: ${
-      process.env.ELEVENLABS_API_KEY
-        ? 'Configured'
-        : 'NOT CONFIGURED'
-    }`
+      process.env.ELEVENLABS_API_KEY ? "Configured" : "NOT CONFIGURED"
+    }`,
   );
 
   console.log(
     `  ElevenLabs Voice: ${
-      process.env.ELEVENLABS_VOICE_ID
-        ? 'Configured'
-        : 'NOT CONFIGURED'
-    }`
+      process.env.ELEVENLABS_VOICE_ID ? "Configured" : "NOT CONFIGURED"
+    }`,
   );
 
-  console.log(
-    `=========================================`
-  );
+  console.log(`=========================================`);
 });
