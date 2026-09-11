@@ -11,13 +11,17 @@ const {
   validateRegistrationInput,
 } = require("../middleware/auth");
 
-// Initialize Google OAuth2 client for ID token verification
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
 // Define the Google OAuth callback URL
 const GOOGLE_REDIRECT_URI =
   process.env.GOOGLE_REDIRECT_URI ||
   "https://aegis-ai-chatbot.onrender.com/api/auth/google/callback";
+
+// Initialize Google OAuth2 client (authorization-code + PKCE flow)
+const googleClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI,
+);
 
 // Temporary in-memory store for Google OAuth login sessions
 const loginCodes = new Map();
@@ -56,12 +60,6 @@ router.post("/google/start", async (req, res) => {
       user: null,
       consumed: false,
     });
-
-    const googleClient = new OAuth2Client(
-      googleClientId,
-      googleClientSecret,
-      GOOGLE_REDIRECT_URI,
-    );
 
     const authUrl = googleClient.generateAuthUrl({
       access_type: "offline",

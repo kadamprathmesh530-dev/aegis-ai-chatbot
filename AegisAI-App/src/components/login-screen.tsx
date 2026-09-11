@@ -179,6 +179,8 @@ export default function LoginScreen({
 
       const startData = await startResponse.json();
 
+      const currentGoogleCode = startData.loginCode;
+
       if (!startResponse.ok || !startData.loginCode || !startData.authUrl) {
         throw new Error(
           startData.error ||
@@ -186,7 +188,7 @@ export default function LoginScreen({
         );
       }
 
-      setGoogleCode(startData.loginCode);
+      setGoogleCode(currentGoogleCode);
 
       // =====================================================
       // STEP 2: Open browser for Google authentication
@@ -222,7 +224,7 @@ export default function LoginScreen({
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              loginCode: googleCode,
+              loginCode: currentGoogleCode,
             }),
           }
         );
