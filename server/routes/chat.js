@@ -1355,7 +1355,8 @@ router.post("/", async (req, res) => {
     let usedMemoryIds = [];
 
     try {
-      const memoryData = await buildMemoryContext(userId, 20);
+      // Phase 2: pass user message for relevance-scored retrieval.
+      const memoryData = await buildMemoryContext(userId, 8, cleanMessage);
 
       memoryContext = memoryData?.context || "";
       usedMemoryIds = Array.isArray(memoryData?.memoryIds)
@@ -1768,7 +1769,8 @@ router.post("/stream", async (req, res) => {
     let usedMemoryIds = [];
 
     try {
-      const memoryData = await buildMemoryContext(userId, 20);
+      // Phase 2: pass user message for relevance-scored retrieval.
+      const memoryData = await buildMemoryContext(userId, 8, cleanMessage);
 
       memoryContext = memoryData?.context || "";
       usedMemoryIds = Array.isArray(memoryData?.memoryIds)

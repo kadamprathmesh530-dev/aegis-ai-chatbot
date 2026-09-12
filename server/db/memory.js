@@ -147,6 +147,52 @@ const memoryQueries = {
   },
 
   /**
+   * Fetch a broad candidate set for relevance scoring.
+   *
+   * Unlike getByUserId() (which returns the top-N by importance/recency),
+   * this returns a larger pool so the service layer can apply smarter
+   * relevance scoring based on the current user message.
+   *
+   * The result is NOT scored or filtered by relevance here — that is the
+   * job of memoryService.buildMemoryContext().
+   */
+  async getRelevantByUserId(userId, candidateLimit = 40) {
+    await ensureMemoryReady();
+
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          category,
+          memory_key,
+          memory_value,
+          importance,
+          confidence,
+          source,
+          created_at,
+          updated_at,
+          last_accessed_at,
+          access_count,
+          expires_at
+        FROM user_memories
+        WHERE user_id = $1
+          AND is_active = TRUE
+          AND (
+            expires_at IS NULL
+            OR expires_at > CURRENT_TIMESTAMP
+          )
+        ORDER BY
+          importance DESC,
+          updated_at DESC
+        LIMIT $2
+      `,
+      [userId, candidateLimit],
+    );
+
+    return result.rows;
+  },
+
+  /**
    * Create or update one memory.
    */
   async upsert({
