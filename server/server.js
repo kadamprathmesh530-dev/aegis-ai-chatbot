@@ -14,6 +14,25 @@ const rateLimit = require("express-rate-limit");
 // connect/init cycle.
 require("./db/database");
 
+// =====================================================
+// LONG-TERM MEMORY SCHEMA (Phase 1)
+//
+// memoryQueries.init() internally awaits the base database
+// initialization (databaseReady) before creating user_memories,
+// so the users foreign-key target always exists first.
+// CREATE TABLE / INDEX IF NOT EXISTS keeps repeated startups
+// idempotent (no duplicate initialization).
+// =====================================================
+
+const { memoryQueries } = require("./db/memory");
+
+memoryQueries.init().catch((memoryInitError) => {
+  console.error(
+    "[MEMORY] Memory table initialization failed:",
+    memoryInitError?.message || memoryInitError,
+  );
+});
+
 const authRoutes = require("./routes/auth");
 const conversationRoutes = require("./routes/conversations");
 const chatRoutes = require("./routes/chat");

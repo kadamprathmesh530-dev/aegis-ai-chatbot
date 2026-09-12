@@ -957,6 +957,7 @@ module.exports = {
   pool,
   db: pool,
   initDatabase,
+  databaseReady,
   userQueries,
   conversationQueries,
   messageQueries

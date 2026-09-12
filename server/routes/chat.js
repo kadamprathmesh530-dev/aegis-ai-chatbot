@@ -9,6 +9,7 @@ const { authenticateToken } = require("../middleware/auth");
 const {
   buildMemoryContext,
   markMemoriesAccessed,
+  extractAndSaveMemories,
 } = require("../services/memoryService");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { GoogleGenAI } = require("@google/genai");
@@ -1342,7 +1343,31 @@ router.post("/", async (req, res) => {
       await messageQueries.findByConversation(activeConversationId);
 
     const recentHistory = Array.isArray(history) ? history.slice(-20) : [];
-    const memoryContext = await buildMemoryContext(userId, 20);
+
+    /**
+     * --------------------------------------------------------
+     * LONG-TERM MEMORY CONTEXT (Phase 1)
+     * A memory-layer failure must never break the chat response.
+     * --------------------------------------------------------
+     */
+
+    let memoryContext = "";
+    let usedMemoryIds = [];
+
+    try {
+      const memoryData = await buildMemoryContext(userId, 20);
+
+      memoryContext = memoryData?.context || "";
+      usedMemoryIds = Array.isArray(memoryData?.memoryIds)
+        ? memoryData.memoryIds
+        : [];
+    } catch (memoryContextError) {
+      console.error(
+        "[MEMORY CONTEXT ERROR]",
+        memoryContextError?.message || memoryContextError,
+      );
+    }
+
     const messages = [
       {
         role: "system",
@@ -1502,6 +1527,37 @@ router.post("/", async (req, res) => {
       console.error(
         "[CHAT] ⚠️ Failed to update conversation timestamp:",
         timestampError?.message || timestampError,
+      );
+    }
+
+    /**
+     * --------------------------------------------------------
+     * LONG-TERM MEMORY (Phase 1) — ACCESS TRACKING + EXTRACTION
+     * Both are best-effort: they run only after the AI response
+     * was successfully generated and saved, and neither may
+     * affect the response that is about to be returned.
+     * --------------------------------------------------------
+     */
+
+    try {
+      await markMemoriesAccessed(userId, usedMemoryIds);
+    } catch (memoryAccessError) {
+      console.error(
+        "[MEMORY ACCESS ERROR]",
+        memoryAccessError?.message || memoryAccessError,
+      );
+    }
+
+    try {
+      await extractAndSaveMemories({
+        userId,
+        userMessage: cleanMessage,
+        assistantMessage: aiText,
+      });
+    } catch (memoryError) {
+      console.error(
+        "[MEMORY EXTRACTION ERROR]",
+        memoryError?.message || memoryError,
       );
     }
 
@@ -1700,7 +1756,31 @@ router.post("/stream", async (req, res) => {
       await messageQueries.findByConversation(activeConversationId);
 
     const recentHistory = Array.isArray(history) ? history.slice(-20) : [];
-    const memoryContext = await buildMemoryContext(userId, 20);
+
+    /**
+     * ------------------------------------------------------
+     * LONG-TERM MEMORY CONTEXT (Phase 1)
+     * A memory-layer failure must never break the stream.
+     * ------------------------------------------------------
+     */
+
+    let memoryContext = "";
+    let usedMemoryIds = [];
+
+    try {
+      const memoryData = await buildMemoryContext(userId, 20);
+
+      memoryContext = memoryData?.context || "";
+      usedMemoryIds = Array.isArray(memoryData?.memoryIds)
+        ? memoryData.memoryIds
+        : [];
+    } catch (memoryContextError) {
+      console.error(
+        "[MEMORY CONTEXT ERROR]",
+        memoryContextError?.message || memoryContextError,
+      );
+    }
+
     const messages = [
       {
         role: "system",
@@ -1877,6 +1957,23 @@ router.post("/stream", async (req, res) => {
 
     /**
      * ------------------------------------------------------
+     * LONG-TERM MEMORY (Phase 1) — ACCESS TRACKING
+     * Marks only the memories that were actually injected
+     * into this response's context. Best-effort only.
+     * ------------------------------------------------------
+     */
+
+    try {
+      await markMemoriesAccessed(userId, usedMemoryIds);
+    } catch (memoryAccessError) {
+      console.error(
+        "[MEMORY ACCESS ERROR]",
+        memoryAccessError?.message || memoryAccessError,
+      );
+    }
+
+    /**
+     * ------------------------------------------------------
      * DONE EVENT
      * ------------------------------------------------------
      */
@@ -1886,6 +1983,28 @@ router.post("/stream", async (req, res) => {
 
       provider: result.provider,
     });
+
+    /**
+     * ------------------------------------------------------
+     * LONG-TERM MEMORY (Phase 1) — EXTRACTION
+     * Runs after the complete assistant response was
+     * generated, saved and announced to the client.
+     * Best-effort only — must never break the stream.
+     * ------------------------------------------------------
+     */
+
+    try {
+      await extractAndSaveMemories({
+        userId,
+        userMessage: cleanMessage,
+        assistantMessage: finalText,
+      });
+    } catch (memoryError) {
+      console.error(
+        "[MEMORY EXTRACTION ERROR]",
+        memoryError?.message || memoryError,
+      );
+    }
 
     return res.end();
   } catch (error) {

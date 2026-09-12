@@ -1,4 +1,4 @@
-const { pool } = require("./database");
+const { pool, databaseReady } = require("./database");
 
 /**
  * AegisAI Long-Term Memory
@@ -7,11 +7,40 @@ const { pool } = require("./database");
  * Every query is scoped by authenticated userId.
  */
 
+/*
+ * Set by init() so callers can await it. Resolves only after the
+ * user_memories table and its indexes have been created. This
+ * prevents a race where databaseReady has resolved (allowing
+ * queries to proceed) but CREATE TABLE has not yet finished.
+ */
+let memoryInitPromise = null;
+
+async function ensureMemoryReady() {
+  // If init() has been called, wait for it to finish. This is the
+  // critical guard: without it, getByUserId/upsert/etc. could run
+  // SELECT/INSERT against user_memories before init() creates it.
+  if (memoryInitPromise) {
+    await memoryInitPromise;
+    return;
+  }
+
+  // init() hasn't been called yet — at least wait for the base
+  // database schema so the foreign-key target (users) exists.
+  await databaseReady;
+}
+
 const memoryQueries = {
   /**
    * Create the memory table and indexes.
    */
   async init() {
+    /*
+     * user_memories has a foreign key to users(id), so the base
+     * schema (created by initDatabase) must exist first.
+     */
+    memoryInitPromise = (async () => {
+    await databaseReady;
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS user_memories (
         id SERIAL PRIMARY KEY,
@@ -74,12 +103,16 @@ const memoryQueries = {
     `);
 
     console.log("[MEMORY] Memory table initialized.");
+    })();
+    return memoryInitPromise;
   },
 
   /**
    * Get active memories for one authenticated user.
    */
   async getByUserId(userId, limit = 50) {
+    await ensureMemoryReady();
+
     const result = await pool.query(
       `
         SELECT
@@ -126,6 +159,8 @@ const memoryQueries = {
     source = "conversation",
     expiresAt = null,
   }) {
+    await ensureMemoryReady();
+
     const result = await pool.query(
       `
         INSERT INTO user_memories (
@@ -185,6 +220,8 @@ const memoryQueries = {
       return;
     }
 
+    await ensureMemoryReady();
+
     await pool.query(
       `
         UPDATE user_memories
@@ -203,6 +240,8 @@ const memoryQueries = {
    * Soft-delete one memory.
    */
   async deactivate(userId, memoryId) {
+    await ensureMemoryReady();
+
     const result = await pool.query(
       `
         UPDATE user_memories
@@ -223,6 +262,8 @@ const memoryQueries = {
    * Delete all memories belonging to one user.
    */
   async deleteAllForUser(userId) {
+    await ensureMemoryReady();
+
     await pool.query(
       `
         DELETE FROM user_memories
