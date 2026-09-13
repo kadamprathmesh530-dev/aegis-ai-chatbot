@@ -105,7 +105,6 @@ const {
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { GoogleGenAI } = require("@google/genai");
 const OpenAI = require("openai");
-const { tavily } = require("@tavily/core");
 const mammoth = require("mammoth");
 
 const {
@@ -115,9 +114,7 @@ const {
   SIMPLE_QUERY_SYSTEM_INSTRUCTION,
 } = require("../providers/gemini/models");
 
-const tavilyClient = tavily({
-  apiKey: process.env.TAVILY_API_KEY,
-});
+const { handleWebQuery } = require("../services/webSearch");
 
 const webAI = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -542,107 +539,6 @@ function getAegisFallbackResponse(userMessage) {
   }
 
   return `I'm sorry, but the AI service is temporarily unavailable. Please try again in a moment.`;
-}
-
-/**
- * ============================================================
- * WEB SEARCH RESPONSE
- * ============================================================
- */
-
-async function generateWebSearchResponse(query) {
-  if (!process.env.TAVILY_API_KEY) {
-    throw new Error("TAVILY_API_KEY is not configured.");
-  }
-
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured.");
-  }
-
-  console.log("[WEB SEARCH] Searching:", query);
-
-  const searchResult = await tavilyClient.search(query, {
-    searchDepth: "advanced",
-    maxResults: 6,
-    includeAnswer: false,
-  });
-
-  const results = Array.isArray(searchResult?.results)
-    ? searchResult.results
-    : [];
-
-  if (!results.length) {
-    throw new Error("No web search results found.");
-  }
-
-  const sourcesText = results
-    .map((result, index) => {
-      return `
-SOURCE ${index + 1}
-Title: ${result.title || "Untitled"}
-URL: ${result.url || ""}
-Content:
-${result.content || ""}
-`;
-    })
-    .join("\n");
-
-  const language = detectAegisLanguage(query);
-
-  const languageInstruction =
-    language === "hinglish"
-      ? "Answer in natural Hinglish because the user asked in Hinglish."
-      : language === "hindi"
-        ? "Answer in Hindi because the user asked in Hindi."
-        : language === "marathi" || language === "marathi-latin"
-          ? "Answer in Marathi because the user asked in Marathi."
-          : "Answer in English because the user asked in English.";
-
-  const prompt = `
-You are answering a user using fresh web-search information.
-
-USER QUERY:
-${query}
-
-SEARCH RESULTS:
-${sourcesText}
-
-${languageInstruction}
-
-Instructions:
-- Answer the actual question directly.
-- Use the search results as your factual basis.
-- Do not invent facts that are not supported by the sources.
-- If sources disagree or information is uncertain, say so.
-- Prefer recent information when the question asks for latest/current information.
-- Keep the answer clear and useful.
-- Do not dump the raw search results.
-- Mention useful source URLs at the end when appropriate.
-`;
-
-  const model = webAI.models;
-
-  const response = await model.generateContent({
-    model: "gemini-3.7-flash",
-    contents: prompt,
-    config: {
-      systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
-    },
-  });
-
-  const text = cleanAIText(response?.text || "");
-
-  if (!text) {
-    throw new Error("Web search AI returned an empty response.");
-  }
-
-  return {
-    text,
-    sources: results.map((result) => ({
-      title: result.title || "Source",
-      url: result.url || "",
-    })),
-  };
 }
 
 /**
@@ -1550,27 +1446,34 @@ router.post("/", async (req, res) => {
     } else if (needsWebSearch) {
       /**
        * --------------------------------------------------------
-       * WEB SEARCH
+       * WEB SEARCH (Phase 3B Tier 1 — safe service)
        * --------------------------------------------------------
        */
       console.log("[CHAT] 🌐 Web search request detected.");
 
+      let webResponse = null;
+
       try {
-        const webResponse = await generateWebSearchResponse(cleanMessage);
-
-        aiText = webResponse.text;
-
-        sources = webResponse.sources || [];
-
-        provider = "web-search";
+        webResponse = await handleWebQuery({
+          query: cleanMessage,
+          language: detectAegisLanguage(cleanMessage),
+        });
       } catch (webError) {
         console.error(
           "[CHAT] ⚠️ Web search failed:",
           webError?.message || webError,
         );
+      }
 
+      if (webResponse) {
+        aiText = webResponse.text;
+
+        sources = webResponse.sources || [];
+
+        provider = "web-search";
+      } else {
         /**
-         * If web search fails, continue with
+         * If web search fails or returns null, continue with
          * normal AI instead of returning an error.
          */
 
@@ -2009,9 +1912,21 @@ router.post("/stream", async (req, res) => {
     if (needsWebSearch) {
       console.log("[AI STREAM] 🌐 Web search request detected.");
 
-      try {
-        const webResponse = await generateWebSearchResponse(cleanMessage);
+      let webResponse = null;
 
+      try {
+        webResponse = await handleWebQuery({
+          query: cleanMessage,
+          language: detectAegisLanguage(cleanMessage),
+        });
+      } catch (webError) {
+        console.error(
+          "[AI STREAM] ⚠️ Web search failed:",
+          webError?.message || webError,
+        );
+      }
+
+      if (webResponse) {
         sendEvent("chunk", {
           content: webResponse.text,
         });
@@ -2022,6 +1937,32 @@ router.post("/stream", async (req, res) => {
           webResponse.text,
         );
 
+        // Phase 3B fix for the web-search early-return gap: memory access
+        // tracking + extraction must run for web-search streams too.
+        // Best-effort only — must never break the stream.
+
+        try {
+          await markMemoriesAccessed(userId, usedMemoryIds);
+        } catch (memoryAccessError) {
+          console.error(
+            "[MEMORY ACCESS ERROR]",
+            memoryAccessError?.message || memoryAccessError,
+          );
+        }
+
+        try {
+          await extractAndSaveMemories({
+            userId,
+            userMessage: cleanMessage,
+            assistantMessage: webResponse.text,
+          });
+        } catch (memoryError) {
+          console.error(
+            "[MEMORY EXTRACTION ERROR]",
+            memoryError?.message || memoryError,
+          );
+        }
+
         sendEvent("done", {
           conversationId: activeConversationId,
           provider: "web-search",
@@ -2029,17 +1970,12 @@ router.post("/stream", async (req, res) => {
         });
 
         return res.end();
-      } catch (webError) {
-        console.error(
-          "[AI STREAM] ⚠️ Web search failed:",
-          webError?.message || webError,
-        );
-
-        /**
-         * Continue with normal AI
-         * if web search fails.
-         */
       }
+
+      /**
+       * Otherwise web search failed or returned null:
+       * continue with normal AI below — never break the stream.
+       */
     }
 
     /**
