@@ -1,3 +1,94 @@
+const isLikelySimpleQuery = function(text) {
+  if (typeof text !== 'string') return false;
+  const t = text.trim();
+  if (!t) return false;
+
+  // If the request is very long, it is probably not a simple one-liner.
+  if (t.length > 140) return false;
+
+  // Explicit requests for detail/explanation/tutorial/examples/step-by-step
+  // should NOT be shortened.
+  const detailedCues = [
+    /\bexplain\b/i,
+    /\bdetail\b/i,
+    /\bdetailed\b/i,
+    /\btutorial\b/i,
+    /\bexamples?\b/i,
+    /\bstep[- ]by[- ]step\b/i,
+    /\bdeep dive\b/i,
+    /\bfrom scratch\b/i,
+    /\bcomprehensive\b/i,
+    /\bpros and cons\b/i,
+    /\bcomparison\b/i,
+    /\bcompare\b/i,
+    /\bhow does\b/i,
+    /\bwhy does\b/i,
+    /\bwhy is\b/i,
+    /\bin detail\b/i,
+    /\bin-depth\b/i,
+    /\bwalk me through\b/i,
+    /\blearn\b/i,
+    /\bteach\b/i,
+    /\bshow me\b/i,
+    /\bwrite\b/i,
+    /\bcode\b/i,
+    /\bfunction\b/i,
+    /\bprogram\b/i,
+    /\bscript\b/i,
+    /\bimplement\b/i,
+    /\bbuild\b/i,
+    /\bcreate a\b/i,
+    /\bmake a\b/i,
+  ];
+
+  if (detailedCues.some((re) => re.test(t))) return false;
+
+  // Treat clearly open-ended opinion/reasoning questions as normal.
+  const openEndedCues = [
+    /\bwhy\b/i,
+    /\bhow come\b/i,
+    /\bin your opinion\b/i,
+    /\bwhat do you think\b/i,
+  ];
+
+  if (openEndedCues.some((re) => re.test(t))) return false;
+
+  // Treat a strong multi-sentence request as normal unless it is clearly
+  // just a single factual question.
+  const sentenceCount = (t.match(/[.!?]+/g) || []).length;
+  if (sentenceCount > 1) return false;
+
+  return true;
+};
+
+function buildChatGenerationConfig(opts, isSimple) {
+  const baseMaxOutputTokens =
+    opts.generationConfig?.maxOutputTokens ??
+    DEFAULT_GENERATION_CONFIG.maxOutputTokens;
+
+  const simpleOverrides = isSimple
+    ? {
+        temperature: 0.0,
+        maxOutputTokens: Math.min(
+          SIMPLE_QUERY_MAX_OUTPUT_TOKENS,
+          baseMaxOutputTokens,
+          MAX_CHAT_OUTPUT_TOKENS,
+        ),
+      }
+    : {
+        maxOutputTokens: Math.min(
+          baseMaxOutputTokens,
+          MAX_CHAT_OUTPUT_TOKENS,
+        ),
+      };
+
+  return {
+    ...DEFAULT_GENERATION_CONFIG,
+    ...(opts.generationConfig ?? {}),
+    ...simpleOverrides,
+  };
+}
+
 const express = require("express");
 const router = express.Router();
 const { v4: uuidv4 } = require("uuid");
