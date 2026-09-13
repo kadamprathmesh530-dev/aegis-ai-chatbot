@@ -58,8 +58,37 @@ ANSWER RULES:
 - Use conversation history for follow-up questions.
 `;
 
+// Simple factual one-liner fast mode (Phase 3A).
+// The chat route uses this ceiling for "What is Python?" style requests and
+// composes SIMPLE_QUERY_SYSTEM_INSTRUCTION with the main AEGIS instruction.
+const SIMPLE_QUERY_MAX_OUTPUT_TOKENS = 200;
+
+// Absolute upper bound applied to every chat response. Matches the current
+// Nemotron cap (4096) used by the chat route.
+const MAX_CHAT_OUTPUT_TOKENS = 4096;
+
+const SIMPLE_QUERY_SYSTEM_INSTRUCTION = `
+==================================================
+SIMPLE QUESTION MODE
+==================================================
+
+The user's latest message is a simple factual one-line question.
+
+- Answer directly and concisely.
+- Normally respond in 1 to 3 short sentences.
+- Do not repeat the question.
+- Do not add unnecessary background, history or filler.
+- Avoid headings, bullet lists and long explanations unless they are
+  genuinely required for the answer.
+- Only give a longer, detailed answer when the user explicitly asks for
+  detail, examples, a tutorial, step-by-step instructions or similar.
+`;
+
 module.exports = {
   MODELS,
   DEFAULT_GENERATION_CONFIG,
-  AEGIS_SYSTEM_INSTRUCTION
+  AEGIS_SYSTEM_INSTRUCTION,
+  SIMPLE_QUERY_MAX_OUTPUT_TOKENS,
+  MAX_CHAT_OUTPUT_TOKENS,
+  SIMPLE_QUERY_SYSTEM_INSTRUCTION
 };

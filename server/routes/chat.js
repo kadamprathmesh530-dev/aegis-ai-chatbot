@@ -108,6 +108,13 @@ const OpenAI = require("openai");
 const { tavily } = require("@tavily/core");
 const mammoth = require("mammoth");
 
+const {
+  SIMPLE_QUERY_MAX_OUTPUT_TOKENS,
+  MAX_CHAT_OUTPUT_TOKENS,
+  DEFAULT_GENERATION_CONFIG,
+  SIMPLE_QUERY_SYSTEM_INSTRUCTION,
+} = require("../providers/gemini/models");
+
 const tavilyClient = tavily({
   apiKey: process.env.TAVILY_API_KEY,
 });
@@ -506,10 +513,10 @@ function cleanAIText(text) {
     .trim();
 }
 
-function getGeminiModel(genAI, modelName) {
+function getGeminiModel(genAI, modelName, systemInstruction = AEGIS_SYSTEM_INSTRUCTION) {
   return genAI.getGenerativeModel({
     model: modelName,
-    systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
+    systemInstruction,
   });
 }
 
@@ -894,7 +901,7 @@ Important:
  * ============================================================
  */
 
-async function generateWithRetry({ genAI, messages, userMessage }) {
+async function generateWithRetry({ genAI, messages, userMessage, isSimple = false }) {
   /**
    * ----------------------------------------------------------
    * PRIMARY — NVIDIA NEMOTRON 3 ULTRA
@@ -907,7 +914,8 @@ async function generateWithRetry({ genAI, messages, userMessage }) {
     const completion = await nvidiaAI.chat.completions.create({
       model: "nvidia/nemotron-3-ultra-550b-a55b",
       messages,
-      max_tokens: 4096,
+      max_tokens: isSimple ? SIMPLE_QUERY_MAX_OUTPUT_TOKENS : 4096,
+      temperature: isSimple ? 0 : undefined,
     });
 
     const text = cleanAIText(completion?.choices?.[0]?.message?.content || "");
@@ -949,7 +957,13 @@ async function generateWithRetry({ genAI, messages, userMessage }) {
     try {
       console.log(`[AI] 🔄 Trying Gemini model: ${modelName}`);
 
-      const model = getGeminiModel(genAI, modelName);
+      const model = getGeminiModel(
+        genAI,
+        modelName,
+        isSimple
+          ? AEGIS_SYSTEM_INSTRUCTION + SIMPLE_QUERY_SYSTEM_INSTRUCTION
+          : AEGIS_SYSTEM_INSTRUCTION,
+      );
 
       const result = await model.generateContent({
         contents: messages
@@ -962,9 +976,7 @@ async function generateWithRetry({ genAI, messages, userMessage }) {
               },
             ],
           })),
-        generationConfig: {
-          maxOutputTokens: 1024,
-        },
+        generationConfig: buildChatGenerationConfig({}, isSimple),
       });
 
       const text = cleanAIText(result?.response?.text?.() || "");
@@ -1016,7 +1028,7 @@ async function generateWithRetry({ genAI, messages, userMessage }) {
  * ============================================================
  */
 
-async function streamWithRetry({ genAI, messages, userMessage, onChunk }) {
+async function streamWithRetry({ genAI, messages, userMessage, onChunk, isSimple = false }) {
   /**
    * ----------------------------------------------------------
    * PROVIDER STREAM IDLE-TIMEOUT
@@ -1108,7 +1120,8 @@ async function streamWithRetry({ genAI, messages, userMessage, onChunk }) {
     const stream = await nvidiaAI.chat.completions.create({
       model: "nvidia/nemotron-3-ultra-550b-a55b",
       messages,
-      max_tokens: 4096,
+      max_tokens: isSimple ? SIMPLE_QUERY_MAX_OUTPUT_TOKENS : 4096,
+      temperature: isSimple ? 0 : undefined,
       stream: true,
     });
 
@@ -1191,7 +1204,13 @@ async function streamWithRetry({ genAI, messages, userMessage, onChunk }) {
     try {
       console.log(`[AI STREAM] 🔄 Trying Gemini model: ${modelName}`);
 
-      const model = getGeminiModel(genAI, modelName);
+      const model = getGeminiModel(
+        genAI,
+        modelName,
+        isSimple
+          ? AEGIS_SYSTEM_INSTRUCTION + SIMPLE_QUERY_SYSTEM_INSTRUCTION
+          : AEGIS_SYSTEM_INSTRUCTION,
+      );
 
       const contents = messages
         .filter((item) => item.role !== "system")
@@ -1217,9 +1236,7 @@ async function streamWithRetry({ genAI, messages, userMessage, onChunk }) {
       const result = await model.generateContentStream(
         {
           contents,
-          generationConfig: {
-            maxOutputTokens: 1024,
-          },
+          generationConfig: buildChatGenerationConfig({}, isSimple),
         },
         { signal: geminiAbortController.signal },
       );
@@ -1460,10 +1477,15 @@ router.post("/", async (req, res) => {
       );
     }
 
+    const isSimple = isLikelySimpleQuery(cleanMessage);
+
     const messages = [
       {
         role: "system",
-        content: AEGIS_SYSTEM_INSTRUCTION + memoryContext,
+        content:
+          AEGIS_SYSTEM_INSTRUCTION +
+          (isSimple ? SIMPLE_QUERY_SYSTEM_INSTRUCTION : "") +
+          memoryContext,
       },
       ...recentHistory.map((item) => ({
         role: item.role === "assistant" ? "assistant" : "user",
@@ -1556,6 +1578,7 @@ router.post("/", async (req, res) => {
           genAI,
           messages,
           userMessage: cleanMessage,
+          isSimple,
         });
 
         aiText = result.text;
@@ -1572,6 +1595,7 @@ router.post("/", async (req, res) => {
         genAI,
         messages,
         userMessage: cleanMessage,
+        isSimple,
       });
 
       aiText = result.text;
@@ -1874,10 +1898,15 @@ router.post("/stream", async (req, res) => {
       );
     }
 
+    const isSimple = isLikelySimpleQuery(cleanMessage);
+
     const messages = [
       {
         role: "system",
-        content: AEGIS_SYSTEM_INSTRUCTION + memoryContext,
+        content:
+          AEGIS_SYSTEM_INSTRUCTION +
+          (isSimple ? SIMPLE_QUERY_SYSTEM_INSTRUCTION : "") +
+          memoryContext,
       },
       ...recentHistory.map((item) => ({
         role: item.role === "assistant" ? "assistant" : "user",
@@ -2025,6 +2054,7 @@ router.post("/stream", async (req, res) => {
       genAI,
       messages,
       userMessage: cleanMessage,
+      isSimple,
       onChunk: (chunk) => {
         streamedText += chunk;
 
