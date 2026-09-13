@@ -1,5 +1,5 @@
-const isLikelySimpleQuery = function(text) {
-  if (typeof text !== 'string') return false;
+const isLikelySimpleQuery = function (text) {
+  if (typeof text !== "string") return false;
   const t = text.trim();
   if (!t) return false;
 
@@ -76,10 +76,7 @@ function buildChatGenerationConfig(opts, isSimple) {
         ),
       }
     : {
-        maxOutputTokens: Math.min(
-          baseMaxOutputTokens,
-          MAX_CHAT_OUTPUT_TOKENS,
-        ),
+        maxOutputTokens: Math.min(baseMaxOutputTokens, MAX_CHAT_OUTPUT_TOKENS),
       };
 
   return {
@@ -115,6 +112,10 @@ const {
 } = require("../providers/gemini/models");
 
 const { handleWebQuery } = require("../services/webSearch");
+const {
+  detectWeatherIntent,
+  handleWeatherQuery,
+} = require("../services/weatherService");
 
 const webAI = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -510,7 +511,11 @@ function cleanAIText(text) {
     .trim();
 }
 
-function getGeminiModel(genAI, modelName, systemInstruction = AEGIS_SYSTEM_INSTRUCTION) {
+function getGeminiModel(
+  genAI,
+  modelName,
+  systemInstruction = AEGIS_SYSTEM_INSTRUCTION,
+) {
   return genAI.getGenerativeModel({
     model: modelName,
     systemInstruction,
@@ -797,7 +802,12 @@ Important:
  * ============================================================
  */
 
-async function generateWithRetry({ genAI, messages, userMessage, isSimple = false }) {
+async function generateWithRetry({
+  genAI,
+  messages,
+  userMessage,
+  isSimple = false,
+}) {
   /**
    * ----------------------------------------------------------
    * PRIMARY — NVIDIA NEMOTRON 3 ULTRA
@@ -924,7 +934,13 @@ async function generateWithRetry({ genAI, messages, userMessage, isSimple = fals
  * ============================================================
  */
 
-async function streamWithRetry({ genAI, messages, userMessage, onChunk, isSimple = false }) {
+async function streamWithRetry({
+  genAI,
+  messages,
+  userMessage,
+  onChunk,
+  isSimple = false,
+}) {
   /**
    * ----------------------------------------------------------
    * PROVIDER STREAM IDLE-TIMEOUT
@@ -1401,6 +1417,32 @@ router.post("/", async (req, res) => {
 
     /**
      * --------------------------------------------------------
+     * WEATHER DETECTION (Phase 3B Tier 2 — dedicated live weather)
+     * --------------------------------------------------------
+     */
+
+    const isWeatherIntent =
+      !fileData && !imageData && detectWeatherIntent(cleanMessage);
+
+    let weatherResponse = null;
+
+    if (isWeatherIntent) {
+      console.log("[CHAT] 🌦️ Weather request detected.");
+      try {
+        weatherResponse = await handleWeatherQuery({
+          message: cleanMessage,
+          language: detectAegisLanguage(cleanMessage),
+        });
+      } catch (weatherError) {
+        console.error(
+          "[CHAT] ⚠️ Weather handling failed:",
+          weatherError?.message || weatherError,
+        );
+      }
+    }
+
+    /**
+     * --------------------------------------------------------
      * WEB SEARCH DETECTION
      * --------------------------------------------------------
      */
@@ -1443,6 +1485,12 @@ router.post("/", async (req, res) => {
       });
 
       provider = "gemini-vision";
+    } else if (weatherResponse) {
+      console.log("[CHAT] 🌦️ Weather data received.");
+
+      aiText = weatherResponse.text;
+      sources = weatherResponse.sources || [];
+      provider = "weather";
     } else if (needsWebSearch) {
       /**
        * --------------------------------------------------------
@@ -1896,6 +1944,79 @@ router.post("/stream", async (req, res) => {
 
         return res.end();
       }
+    }
+
+    /**
+     * ------------------------------------------------------
+     * WEATHER STREAM (Phase 3B Tier 2 — dedicated live weather)
+     * ------------------------------------------------------
+     */
+    const isWeatherIntent = !imageData && detectWeatherIntent(cleanMessage);
+
+    if (isWeatherIntent) {
+      console.log("[AI STREAM] 🌦️ Weather request detected.");
+
+      let weatherResponse = null;
+
+      try {
+        weatherResponse = await handleWeatherQuery({
+          message: cleanMessage,
+          language: detectAegisLanguage(cleanMessage),
+        });
+      } catch (weatherError) {
+        console.error(
+          "[AI STREAM] ⚠️ Weather handling failed:",
+          weatherError?.message || weatherError,
+        );
+      }
+
+      if (weatherResponse) {
+        sendEvent("chunk", {
+          content: weatherResponse.text,
+        });
+
+        await messageQueries.create(
+          activeConversationId,
+          "assistant",
+          weatherResponse.text,
+        );
+
+        // Memory access tracking + extraction (same as web-search path)
+        try {
+          await markMemoriesAccessed(userId, usedMemoryIds);
+        } catch (memoryAccessError) {
+          console.error(
+            "[MEMORY ACCESS ERROR]",
+            memoryAccessError?.message || memoryAccessError,
+          );
+        }
+
+        try {
+          await extractAndSaveMemories({
+            userId,
+            userMessage: cleanMessage,
+            assistantMessage: weatherResponse.text,
+          });
+        } catch (memoryError) {
+          console.error(
+            "[MEMORY EXTRACTION ERROR]",
+            memoryError?.message || memoryError,
+          );
+        }
+
+        sendEvent("done", {
+          conversationId: activeConversationId,
+          provider: "weather",
+          sources: weatherResponse.sources || [],
+        });
+
+        return res.end();
+      }
+
+      /**
+       * Otherwise weather failed or returned null:
+       * fall through to existing web-search behavior.
+       */
     }
 
     /**
