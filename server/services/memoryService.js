@@ -458,6 +458,42 @@ Rules:
 - Output raw JSON only. No markdown, no explanations.
 `;
 
+/**
+ * ADVISORY classifier system instruction.
+ *
+ * This prompt is used ONLY to label how a NEWLY extracted memory relates
+ * to an EXISTING one that shares the same (category, memory_key) for the
+ * same user. The model NEVER receives or supplies:
+ *   - userId            (server owns it)
+ *   - database id       (SERIAL, server-generated)
+ *   - memory_key         (identity is fixed by the caller from the existing row)
+ *   - source             (forced to 'conversation' by the server)
+ *   - any SQL/write action (the server performs the write)
+ *
+ * The model may only return an action enum. Its verdict is advisory; the
+ * server remains the single authority for identity, ownership, and writes.
+ */
+const MEMORY_CLASSIFY_SYSTEM_INSTRUCTION = `
+You are an advisory memory-classification helper for a personal AI
+assistant. You are given an EXISTING memory and a NEW memory that share
+the SAME (category, memory_key) for the SAME user. The NEW memory_value
+is a direct reflection of what the user just said. Your ONLY job is to
+pick ONE action and return STRICT JSON:
+
+{"action":"duplicate"}     - NEW value says the same thing as EXISTING
+{"action":"update"}        - NEW value replaces/refines EXISTING without logical conflict
+{"action":"contradiction"} - NEW value directly conflicts with / retracts EXISTING
+{"action":"ignore"}        - you cannot decide reliably, or the value is not useful
+
+Rules:
+- A preference/life-fact change expressed as "I now prefer X" (replacing
+  "I prefer Y") is a contradiction: the old fact is retracted.
+- A version/description refinement (e.g. "Python 3.10" -> "Python 3.11") is an update.
+- If the two values express the same fact in different words, it is a duplicate.
+- Do NOT invent actions, ids, or operations. Do NOT touch any database.
+- Output raw JSON only. No markdown. No explanations.
+`;
+
 const SENSITIVE_MEMORY_PATTERN =
   /(password|passwd|pwd|secret|api[_\s-]?key|apikey|access[_\s-]?token|auth[_\s-]?token|refresh[_\s-]?token|bearer\s|credential|private[_\s-]?key|ssh[_\s-]?key|credit[_\s-]?card|card\s*number|cvv|cvc|debit\s*card|bank\s*account|ifsc\s*code|upi\s*pin|otp|one[\s_-]?time[\s_-]?password|ssn|aadhaar|pan\s*number|passport\s*number)/i;
 
@@ -713,6 +749,214 @@ async function generateMemoryExtraction(prompt) {
 }
 
 /**
+ * Normalize a memory value for stable equality comparison.
+ *
+ * Collapses whitespace and lower-cases so that "Python" and "python "
+ * are treated as the same fact. Punctuation is intentionally preserved
+ * ("C++" !== "c#" while "C++" === "c++").
+ */
+function normalizeMemoryValue(value) {
+  if (!value || typeof value !== 'string') {
+    return '';
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Robustly extract the first JSON object/array from a raw model string.
+ *
+ * Mirrors parseMemoryExtractionOutput's fence/brace handling, but returns
+ * the parsed object directly (the classifier returns {"action":"..."}
+ * which is neither an array nor a {memories:[...]} shape).
+ */
+function safeParseJsonObject(rawText) {
+  const text = String(rawText || '').trim();
+
+  if (!text) {
+    return null;
+  }
+
+  // Strip markdown fences if the model added them anyway.
+  const withoutFences = text
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/, '')
+    .trim();
+
+  const startObject = withoutFences.indexOf('{');
+  const startArray = withoutFences.indexOf('[');
+  const start =
+    startArray >= 0 && (startObject < 0 || startArray < startObject)
+      ? startArray
+      : startObject;
+
+  const endObject = withoutFences.lastIndexOf('}');
+  const endArray = withoutFences.lastIndexOf(']');
+    const end =
+    endArray >= 0 && (endObject < 0 || endArray > endObject)
+      ? endArray
+      : endObject;
+
+    if (start < 0 || end <= start) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(withoutFences.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ADVISORY classifier: decide how a newly extracted memory relates to an
+ * existing one that shares the same (user_id, category, memory_key).
+ *
+ * Returns one of: 'update' | 'contradiction' | 'duplicate' | 'ignore'.
+ *
+ * SAFETY:
+ * - The model ONLY receives the two values + their importance/confidence and
+ *   returns an action enum. It never sees or sets:
+ *     - userId            (server owns it)
+ *     - database id       (SERIAL, server-generated)
+ *     - memory_key        (identity fixed by the caller from the existing row)
+ *     - source            (forced to 'conversation' by the server)
+ *     - any SQL/write op   (the server performs the write)
+ * - On ANY failure (no API key, model error, timeout, empty reply, parse
+ *   failure, or an unsupported action) it returns 'ignore'. The caller
+ *   then leaves the existing memory untouched — fail-safe by design.
+ */
+async function classifyMemoryAgainstExisting(existing, candidate) {
+  if (!process.env.GEMINI_API_KEY) {
+    return 'ignore';
+  }
+
+  const prompt = `
+EXISTING MEMORY (already stored for this user):
+category: ${String(existing.category || '')}
+memory_key: ${String(existing.memory_key || '')}
+memory_value: ${String(existing.memory_value || '')}
+importance: ${existing.importance != null ? existing.importance : ''}
+confidence: ${existing.confidence != null ? existing.confidence : ''}
+
+NEW MEMORY (just extracted from the user's latest message):
+category: ${String(candidate.category || '')}
+memory_key: ${String(candidate.memoryKey || '')}
+memory_value: ${String(candidate.memoryValue || '')}
+importance: ${candidate.importance != null ? candidate.importance : ''}
+confidence: ${candidate.confidence != null ? candidate.confidence : ''}
+
+Both refer to the SAME (category, memory_key) for the SAME user. The NEW
+memory_value is a direct quote of what the user just said.
+
+Return STRICT JSON only:
+{"action":"<one of duplicate|update|contradiction|ignore>"}
+No markdown. No explanations.
+`;
+
+  let lastError = null;
+
+  for (const modelName of MEMORY_EXTRACTION_MODELS) {
+    let timeoutId = null;
+    try {
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        systemInstruction: MEMORY_CLASSIFY_SYSTEM_INSTRUCTION,
+      });
+
+      const classificationPromise = model.generateContent({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }],
+          },
+        ],
+        generationConfig: {
+          maxOutputTokens: 256,
+          temperature: 0,
+        },
+      });
+
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const timeoutError = new Error(
+            `Memory classification timed out after ${MEMORY_EXTRACTION_TIMEOUT_MS}ms.`,
+          );
+          timeoutError.code = 'MEMORY_CLASSIFICATION_TIMEOUT';
+          reject(timeoutError);
+        }, MEMORY_EXTRACTION_TIMEOUT_MS);
+      });
+
+      let parsed = null;
+      try {
+        const result = await Promise.race([
+          classificationPromise,
+          timeoutPromise,
+        ]);
+        // Swallow any late model rejection so it cannot surface as an
+        // unhandled rejection (matches generateMemoryExtraction).
+        classificationPromise.catch(() => {});
+
+        const text = String(result?.response?.text?.() || '').trim();
+        if (!text) {
+          throw new Error(
+            `${modelName} returned an empty classification response.`,
+          );
+        }
+
+        parsed = safeParseJsonObject(text);
+        if (!parsed) {
+          throw new Error(
+            `${modelName} returned unparseable classification JSON.`,
+          );
+        }
+      } catch (raceError) {
+        classificationPromise.catch(() => {});
+        throw raceError;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const action = String(parsed.action || '').trim().toLowerCase();
+      if (
+        action === 'update' ||
+        action === 'contradiction' ||
+        action === 'duplicate' ||
+        action === 'ignore'
+      ) {
+        return action;
+      }
+
+      // Unsupported action value -> fail safe.
+      console.error(
+        `[MEMORY] Unsupported classification action "${action}" from ${modelName}.`,
+      );
+      return 'ignore';
+    } catch (modelError) {
+      lastError = modelError;
+      console.error(
+        `[MEMORY] ⚠️ Classification model ${modelName} failed:`,
+        modelError?.message || modelError,
+      );
+    }
+  }
+
+  // Every model failed / timed out -> fail safe (do not overwrite).
+  if (lastError) {
+    console.error(
+      '[MEMORY] All classification models failed;'
+        + ' existing memory left unchanged.',
+      lastError?.message || lastError,
+    );
+  }
+  return 'ignore';
+}
+
+/**
  * Extract useful long-term information from one user/assistant
  * exchange and persist it through the existing saveMemory() path.
  *
@@ -771,27 +1015,144 @@ Extract long-term memories about the user now. Respond with strict JSON only.
 
   const savedMemories = [];
 
-  for (const memoryCandidate of sanitizedMemories) {
+    for (const memoryCandidate of sanitizedMemories) {
     try {
-      // saveMemory() centralizes user scoping, validation and the
-      // (user_id, category, memory_key) upsert, so a newer value for
-      // the same memory_key updates the existing row.
-      const savedMemory = await saveMemory({
+      // Identity is the strict (user_id, category, memory_key) tuple
+      // enforced by the DB UNIQUE constraint. We NEVER merge across
+      // different keys — that is the hard safeguard against overwriting
+      // an unrelated memory merely because the model guessed the two
+      // facts were related.
+      const existing = await memoryQueries.getByCategoryKey(
+        userId,
+        memoryCandidate.category,
+        memoryCandidate.memoryKey,
+      );
+
+      // (B) No active, non-expired memory for this key -> create as NEW
+      //     through the unchanged saveMemory() path.
+      if (!existing) {
+        const savedMemory = await saveMemory({
+          userId,
+          category: memoryCandidate.category,
+          memoryKey: memoryCandidate.memoryKey,
+          memoryValue: memoryCandidate.memoryValue,
+          importance: memoryCandidate.importance,
+          confidence: memoryCandidate.confidence,
+          source: 'conversation',
+        });
+
+        if (savedMemory) {
+          savedMemories.push(savedMemory);
+        }
+        continue;
+      }
+
+      // (C) Identical normalized value -> duplicate. Do nothing; never
+      //     create a second row for the same (user_id, category, key).
+      const normalizedExisting = normalizeMemoryValue(existing.memory_value);
+      const normalizedCandidate = normalizeMemoryValue(
+        memoryCandidate.memoryValue,
+      );
+
+      if (normalizedExisting === normalizedCandidate) {
+        savedMemories.push(existing);
+        continue;
+      }
+
+      // (D) Different value -> ADVISORY Gemini classification. The model
+      //     may ONLY return an action enum; it can never own the userId,
+      //     the database id, the memory_key identity, the source, or the
+      //     write. The server remains the single authority. Anything that
+      //     is not a clean, supported verdict fails safe to 'ignore'.
+      let classification = 'ignore';
+      try {
+        classification = await classifyMemoryAgainstExisting(
+          existing,
+          memoryCandidate,
+        );
+      } catch (classifyError) {
+        console.error(
+          '[MEMORY] Classification step failed (fail-safe ignore):',
+          classifyError?.message || classifyError,
+        );
+        classification = 'ignore';
+      }
+
+      if (
+        classification === 'duplicate' ||
+        classification === 'ignore'
+      ) {
+        if (classification === 'duplicate') {
+          savedMemories.push(existing);
+        }
+        continue;
+      }
+
+      // (4) Server-side low-confidence safety gate. A trusted
+      //     (confidence >= 0.90) memory must NOT be rewritten by a
+      //     low-confidence (< 0.60) extraction — neither by "update"
+      //     nor by "contradiction". The classifier can never bypass it.
+      const existingConfidence = Number(existing.confidence);
+      const incomingConfidence = Number(memoryCandidate.confidence);
+
+      if (existingConfidence >= 0.90 && incomingConfidence < 0.60) {
+        console.log(
+          `[MEMORY] Trusted memory "${existing.memory_key}" ` +
+            `(${existing.category}) NOT overwritten: existing confidence ` +
+            `${existingConfidence} >= 0.90 and incoming ` +
+            `${incomingConfidence} < 0.60 ` +
+            `(classified as ${classification}).`,
+        );
+        savedMemories.push(existing);
+        continue;
+      }
+
+      // (3) Apply update / contradiction write through the existing upsert.
+      //     Both actions replace memory_value with the new explicit user
+      //     statement. The upsert preserves created_at, access_count and
+      //     last_accessed_at (those columns are NOT in DO UPDATE SET),
+      //     sets is_active = TRUE and bumps updated_at to now.
+      //
+      // Confidence policy (approved):
+      //   - "update"      -> confidence = max(existing, incoming)
+      //                       A refinement/retraction that is NOT a logical
+      //                       conflict should never lose trust.
+      //   - "contradiction" -> confidence = incomingConfidence
+      //                       The stored value is the NEW explicit user
+      //                       statement, so the confidence stored should
+      //                       reflect confidence IN THAT NEW VALUE, not the
+      //                       old one. (Section 3 specified this.)
+      //   The server-side safety gate above (existing >= 0.90 AND incoming
+      //   < 0.60) still blocks the entire overwrite first; this policy only
+      //   applies to writes that pass the gate.
+      const newImportance = Math.max(
+        typeof existing.importance === 'number'
+          ? existing.importance
+          : 5,
+        memoryCandidate.importance,
+      );
+      const newConfidence =
+        classification === 'update'
+          ? Math.max(existingConfidence, incomingConfidence)
+          : incomingConfidence;
+
+      const updated = await memoryQueries.upsert({
         userId,
         category: memoryCandidate.category,
         memoryKey: memoryCandidate.memoryKey,
         memoryValue: memoryCandidate.memoryValue,
-        importance: memoryCandidate.importance,
-        confidence: memoryCandidate.confidence,
+        importance: newImportance,
+        confidence: newConfidence,
         source: 'conversation',
+        expiresAt: null,
       });
 
-      if (savedMemory) {
-        savedMemories.push(savedMemory);
+      if (updated) {
+        savedMemories.push(updated);
       }
     } catch (saveMemoryError) {
       console.error(
-        '[MEMORY] Failed to save extracted memory:',
+        '[MEMORY] Failed to process extracted memory:',
         saveMemoryError?.message || saveMemoryError,
       );
     }
@@ -799,7 +1160,7 @@ Extract long-term memories about the user now. Respond with strict JSON only.
 
   if (savedMemories.length) {
     console.log(
-      `[MEMORY] Saved ${savedMemories.length} extracted memory/memories.`,
+      `[MEMORY] Saved ${savedMemories.length} memory/memories.`,
     );
   }
 

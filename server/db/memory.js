@@ -190,6 +190,55 @@ const memoryQueries = {
     );
 
     return result.rows;
+    },
+
+  /**
+   * Fetch a single existing memory by its unique business key
+   * (user_id, category, memory_key).
+   *
+   * Used by the automatic extraction pipeline to decide whether a newly
+   * extracted memory is new, an update, or a contradiction of an existing
+   * one.
+   *
+   * Only ACTIVE, non-expired rows are treated as "existing" — a memory
+   * that was soft-deleted (is_active = FALSE) or has expired is treated as
+   * no existing memory, so a restatement can re-activate it via upsert.
+   *
+   * Returns the row (all fields needed by the service layer) or null.
+   */
+  async getByCategoryKey(userId, category, memoryKey) {
+    await ensureMemoryReady();
+
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          category,
+          memory_key,
+          memory_value,
+          importance,
+          confidence,
+          source,
+          created_at,
+          updated_at,
+          last_accessed_at,
+          access_count,
+          expires_at
+        FROM user_memories
+        WHERE user_id = $1
+          AND category = $2
+          AND memory_key = $3
+          AND is_active = TRUE
+          AND (
+            expires_at IS NULL
+            OR expires_at > CURRENT_TIMESTAMP
+          )
+        LIMIT 1
+      `,
+      [userId, category, memoryKey],
+    );
+
+    return result.rows[0] || null;
   },
 
   /**
