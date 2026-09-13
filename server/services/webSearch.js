@@ -19,7 +19,28 @@ const { AEGIS_SYSTEM_INSTRUCTION } = require("../providers/gemini/models");
 
 // Timeouts are environment-overridable so deterministic tests can run fast.
 const SEARCH_TIMEOUT_MS = Number(process.env.WEB_SEARCH_SEARCH_TIMEOUT_MS || 12000);
-const SYNTHESIS_TIMEOUT_MS = Number(process.env.WEB_SEARCH_SYNTHESIS_TIMEOUT_MS || 12000);
+
+// TOTAL synthesis budget (Phase 3B latency fix). Each model attempt uses only
+// the REMAINING time from this budget, so the complete synthesis stage can
+// never exceed it. The old design gave every model its own full 12s timeout,
+// which made a slow gemini-3.7-flash burn the whole budget and kill the
+// web-search answer on Render.
+const SYNTHESIS_TOTAL_TIMEOUT_MS = Number(
+  process.env.WEB_SEARCH_SYNTHESIS_TIMEOUT_MS || 15000,
+);
+
+// Source-grounded synthesis is a bounded extractive task (answer from the
+// supplied snippets, cite only supplied URLs), so the fastest reliable model
+// is preferred first and the strongest model is kept as the last resort.
+// All three models already exist in providers/gemini/models.js — no new deps.
+const SYNTHESIS_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.7-flash",
+];
+
+// Bounded generation: a slow/verbose model cannot run away with the budget.
+const SYNTHESIS_MAX_OUTPUT_TOKENS = 1024;
 
 const MAX_RETRIES = 1; // maximum 1 retry on Tavily
 const MAX_RESULTS = 6; // cap search results (keeps existing behavior)
@@ -198,8 +219,17 @@ async function searchWithRetry(query) {
 }
 
 /**
- * Synthesize a source-aware answer using Gemini (same library/flow the chat
- * route used before the refactor: @google/genai + gemini-3.7-flash).
+ * Synthesize a source-aware answer using Gemini (@google/genai), with a
+ * fast-first model fallback chain inside a TOTAL time budget.
+ *
+ * Phase 3B latency fix:
+ * - The complete synthesis stage can never exceed SYNTHESIS_TOTAL_TIMEOUT_MS.
+ *   Each attempt uses only the REMAINING budget (never its own full timeout).
+ * - Failure modes per model: throw, timeout, or empty output -> log and move
+ *   to the next model while time remains.
+ * - The security prompt is unchanged: search results are UNTRUSTED DATA.
+ * - Never throws into the caller for synthesis failures: returns null when
+ *   every attempt fails so the chat route keeps its normal-AI fallback.
  */
 async function synthesizeAnswer({ query, results, languageInstruction }) {
   if (!process.env.GEMINI_API_KEY) {
@@ -213,21 +243,65 @@ async function synthesizeAnswer({ query, results, languageInstruction }) {
     languageInstruction,
   });
 
-  const response = await withTimeout(
-    genai.models.generateContent({
-      model: "gemini-3.7-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
-      },
-    }),
-    SYNTHESIS_TIMEOUT_MS,
-    "Web search AI synthesis",
+  const synthesisDeadline = Date.now() + SYNTHESIS_TOTAL_TIMEOUT_MS;
+  let lastError = null;
+
+  for (const modelName of SYNTHESIS_MODELS) {
+    const remainingMs = synthesisDeadline - Date.now();
+
+    if (remainingMs <= 0) {
+      console.warn(
+        `[WEB SEARCH] Synthesis time budget exhausted before ${modelName}.`,
+      );
+      break;
+    }
+
+    try {
+      const response = await withTimeout(
+        genai.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
+            maxOutputTokens: SYNTHESIS_MAX_OUTPUT_TOKENS,
+          },
+        }),
+        remainingMs,
+        `Web search AI synthesis (${modelName})`,
+      );
+
+      const text = String(response?.text || "").trim();
+
+      if (text) {
+        return text;
+      }
+
+      lastError = new Error(
+        `${modelName} returned an empty synthesis response.`,
+      );
+
+      console.warn(
+        `[WEB SEARCH] Synthesis model ${modelName} failed:`,
+        lastError.message,
+      );
+    } catch (error) {
+      lastError = error;
+
+      console.warn(
+        `[WEB SEARCH] Synthesis model ${modelName} failed:`,
+        error?.message || error,
+      );
+    }
+  }
+
+  // All attempts failed (or the budget ran out). Fail safe: the caller's
+  // normal-AI fallback takes over. Never throw here.
+  console.warn(
+    "[WEB SEARCH] All synthesis models failed:",
+    lastError?.message || lastError || "time budget exhausted",
   );
 
-  const text = String(response?.text || "").trim();
-
-  return text || null;
+  return null;
 }
 
 /**
