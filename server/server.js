@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const cors = require("cors");
@@ -9,7 +9,7 @@ const rateLimit = require("express-rate-limit");
 // database.js initializes the schema and seeds the admin user itself
 // (via the module-level `databaseReady` promise, exported as `pool`/`db`
 // so query helpers can `await databaseReady` before running).
-// Requiring it here is enough to kick that off — do not call
+// Requiring it here is enough to kick that off â€” do not call
 // initDatabase() again, since that would start a second concurrent
 // connect/init cycle.
 require("./db/database");
@@ -41,6 +41,7 @@ const adminRoutes = require("./routes/admin");
 
 // ElevenLabs TTS
 const ttsRoutes = require("./routes/tts");
+const subscriptionRoutes = require("./routes/subscription");
 
 const app = express();
 
@@ -189,6 +190,7 @@ app.use("/api/admin", adminRoutes);
 // =====================================================
 
 app.use("/api/tts", ttsRoutes);
+app.use("/api/subscription", subscriptionRoutes);
 
 // =====================================================
 // HEALTH CHECK
@@ -276,3 +278,4 @@ app.listen(PORT, () => {
 
   console.log(`=========================================`);
 });
+

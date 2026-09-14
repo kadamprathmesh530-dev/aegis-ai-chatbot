@@ -1,4 +1,4 @@
-const net = require('net');
+﻿const net = require('net');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 
@@ -690,7 +690,7 @@ const conversationQueries = {
 
 
   // ------------------------------------------------------------
-  // Compatibility aliases — some routes still use the older
+  // Compatibility aliases â€” some routes still use the older
   // method names (findById / updateTimestamp). They delegate
   // to the current implementations so no logic is duplicated.
   // ------------------------------------------------------------
@@ -910,7 +910,7 @@ const messageQueries = {
 
 
   // ------------------------------------------------------------
-  // Compatibility aliases — some routes still use the older
+  // Compatibility aliases â€” some routes still use the older
   // method names (create / findByConversation). They delegate
   // to the current implementations so no logic is duplicated.
   // ------------------------------------------------------------
@@ -953,6 +953,40 @@ const messageQueries = {
  * --------------------------------------------------
  */
 
+/*
+ * Subscription Queries
+ * Handles user subscription plan/status/expiry.
+ */
+const subscriptionQueries = {
+  async getSubscription(userId) {
+    await databaseReady;
+
+    const result = await pool.query(
+      `SELECT id, plan, subscription_status, subscription_expires_at
+       FROM users
+       WHERE id = $1`,
+      [userId]
+    );
+
+    return result.rows[0] || null;
+  },
+
+  async updateSubscription(userId, plan, subscriptionStatus, subscriptionExpiresAt = null) {
+    await databaseReady;
+
+    const result = await pool.query(
+      `UPDATE users
+       SET plan = $2,
+           subscription_status = $3,
+           subscription_expires_at = $4
+       WHERE id = $1
+       RETURNING id, plan, subscription_status, subscription_expires_at`,
+      [userId, plan, subscriptionStatus, subscriptionExpiresAt]
+    );
+
+    return result.rows[0] || null;
+  }
+};
 module.exports = {
   pool,
   db: pool,
@@ -960,5 +994,8 @@ module.exports = {
   databaseReady,
   userQueries,
   conversationQueries,
-  messageQueries
+  messageQueries,
+  subscriptionQueries
 };
+
+
