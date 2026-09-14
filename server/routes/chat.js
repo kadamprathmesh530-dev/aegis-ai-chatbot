@@ -552,6 +552,52 @@ function getAegisFallbackResponse(userMessage) {
  * ============================================================
  */
 
+/**
+ * Verified Gemini vision-capable models (multimodal image input).
+ * PRIMARY: gemini-3.7-flash (valid, occasionally under high demand -> 503)
+ * FALLBACK: gemini-3.6-flash / gemini-3.5-flash (verified generateContent
+ * + image input against the configured API key).
+ * Never use text-only models here.
+ */
+const VISION_MODELS = [
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+];
+const VISION_MAX_ATTEMPTS = 3;
+const VISION_RETRY_BASE_DELAY_MS = 1000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTemporaryVisionError(error) {
+  const status = error?.status ?? error?.code;
+
+  if (
+    typeof status === "number" &&
+    [429, 500, 502, 503, 504].includes(status)
+  ) {
+    return true;
+  }
+
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    message.includes("unavailable") ||
+    message.includes("overload") ||
+    message.includes("high demand") ||
+    message.includes("rate limit") ||
+    message.includes("resource_exhausted") ||
+    message.includes("timeout") ||
+    message.includes("etimedout") ||
+    message.includes("econn") ||
+    message.includes("socket hang up") ||
+    message.includes("fetch failed") ||
+    message.includes("network")
+  );
+}
+
 async function generateVisionResponse({
   message,
   imageData,
@@ -585,38 +631,82 @@ Important:
 - Follow the user's language.
 `;
 
-  const response = await model.generateContent({
-    model: "gemini-3.7-flash",
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: prompt,
-          },
-          {
-            inlineData: {
-              mimeType: imageMimeType,
-              data: imageData,
+  let lastError = null;
+
+  for (const visionModel of VISION_MODELS) {
+    for (let attempt = 1; attempt <= VISION_MAX_ATTEMPTS; attempt++) {
+      try {
+        console.log(`[VISION] Model: ${visionModel}`);
+        console.log(`[VISION] Attempt ${attempt}/${VISION_MAX_ATTEMPTS}`);
+
+        const response = await model.generateContent({
+          model: visionModel,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: prompt,
+                },
+                {
+                  inlineData: {
+                    mimeType: imageMimeType,
+                    data: imageData,
+                  },
+                },
+              ],
             },
+          ],
+          config: {
+            systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
           },
-        ],
-      },
-    ],
-    config: {
-      systemInstruction: AEGIS_SYSTEM_INSTRUCTION,
-    },
-  });
+        });
 
-  const text = cleanAIText(response?.text || "");
+        const text = cleanAIText(response?.text || "");
 
-  if (!text) {
-    throw new Error("Vision model returned an empty response.");
+        if (!text) {
+          throw new Error("Vision model returned an empty response.");
+        }
+
+        console.log("[VISION] Vision response generated successfully");
+
+        return text;
+      } catch (error) {
+        lastError = error;
+
+        // Invalid image / bad request / safety block -> retrying will not help.
+        if (!isTemporaryVisionError(error)) {
+          console.error(
+            `[VISION] Non-temporary error on ${visionModel}:`,
+            String(error?.message || error).slice(0, 300),
+          );
+          throw error;
+        }
+
+        if (attempt < VISION_MAX_ATTEMPTS) {
+          const delayMs =
+            VISION_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+
+          console.log(
+            `[VISION] Temporary model error, retrying in ${delayMs}ms...`,
+          );
+
+          await sleep(delayMs);
+        }
+      }
+    }
+
+    console.log(
+      `[VISION] ${visionModel} is still unavailable, trying next vision model...`,
+    );
   }
 
-  console.log("[VISION] ✅ Image analysis completed.");
+  console.error(
+    "[VISION] All vision models failed:",
+    String(lastError?.message || lastError).slice(0, 300),
+  );
 
-  return text;
+  throw lastError;
 }
 
 /**
